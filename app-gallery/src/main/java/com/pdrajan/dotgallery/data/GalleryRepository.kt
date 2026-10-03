@@ -172,10 +172,10 @@ class GalleryRepository(private val database: GalleryDatabase) {
 
     data class Pending(val id: Long, val uri: android.net.Uri, val isVideo: Boolean, val name: String, val path: String?)
 
-    suspend fun pending(limit: Int): List<Pending> = withContext(Dispatchers.IO) {
+    suspend fun pending(limit: Int, since: Long = 0L): List<Pending> = withContext(Dispatchers.IO) {
         db.rawQuery(
-            "SELECT id, uri, type, name, path FROM media WHERE state = ? ORDER BY taken_at DESC LIMIT ?",
-            arrayOf(STATE_PENDING.toString(), limit.toString()),
+            "SELECT id, uri, type, name, path FROM media WHERE state = ? AND taken_at >= ? ORDER BY taken_at DESC LIMIT ?",
+            arrayOf(STATE_PENDING.toString(), since.toString(), limit.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(Pending(c.getLong(0), c.getString(1).toUri(), c.getInt(2) == 1, c.getString(3), c.getString(4))) } }
     }
 
@@ -395,6 +395,13 @@ class GalleryRepository(private val database: GalleryDatabase) {
     // ---------------------------------------------------------------- photo descriptions
 
     data class CaptionJob(val id: Long, val uri: android.net.Uri, val name: String)
+
+    /** One photo to describe right away ("Describe now"), whatever its state. */
+    suspend fun captionJob(id: Long): CaptionJob? = withContext(Dispatchers.IO) {
+        db.rawQuery("SELECT id, uri, name FROM media WHERE id = ? AND type = 0", arrayOf(id.toString())).use { c ->
+            if (c.moveToFirst()) CaptionJob(c.getLong(0), c.getString(1).toUri(), c.getString(2)) else null
+        }
+    }
 
     /** Analysed photos (not videos) still waiting for a description, newest first; [since] limits to recent ones. */
     suspend fun captionQueue(limit: Int, since: Long = 0L): List<CaptionJob> = withContext(Dispatchers.IO) {

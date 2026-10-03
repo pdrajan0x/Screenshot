@@ -17,7 +17,7 @@ class Settings(context: Context) {
     private val _readHindi = MutableStateFlow(prefs.getBoolean(KEY_HINDI, true))
     val readHindi: StateFlow<Boolean> = _readHindi.asStateFlow()
 
-    private val _processing = MutableStateFlow(ProcessingPolicy.load(prefs, KEY_CHARGING))
+    private val _processing = MutableStateFlow(ProcessingPolicy.load(prefs))
     /** Settings → Processing: in the background or not, only while charging or above a battery level. */
     val processing: StateFlow<ProcessingPolicy> = _processing.asStateFlow()
 
@@ -60,7 +60,6 @@ class Settings(context: Context) {
     private companion object {
         const val KEY_THEME = "theme"
         const val KEY_HINDI = "read_hindi"
-        const val KEY_CHARGING = "backlog_while_charging"
         const val KEY_ONBOARDED = "onboarding_done"
         const val KEY_COLUMNS = "grid_columns"
         const val KEY_AVG_MS = "avg_index_ms"

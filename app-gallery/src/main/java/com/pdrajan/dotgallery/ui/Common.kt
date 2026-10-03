@@ -110,7 +110,8 @@ fun MediaThumb(
         selectionMode = selectionMode,
         onClick = onClick,
         onLongClick = null,
-        processed = media.described,
+        // Videos aren't described, so they never get the dot.
+        pending = !media.described && !media.isVideo,
     ) {
         if (media.isVideo) {
             Row(

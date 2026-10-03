@@ -26,16 +26,22 @@ object VisionPrompts {
             "desc ::= [^\\n:]{10,220}\n" +
             KEYWORD_RULES
 
-    /** Screenshots: the model sees the image; the OCR text (often sharper than the shrunk image) comes along. */
-    fun screenshot(screenText: String, knownApp: String?): String = buildString {
+    /**
+     * Screenshots: the model sees the image; the OCR text (often sharper than the shrunk image) comes
+     * along, plus [hints]: apps whose own interface words are on screen (see [AppHints]).
+     */
+    fun screenshot(screenText: String, knownApp: String?, hints: List<String> = emptyList()): String = buildString {
         append("This is a phone screenshot.")
         knownApp?.takeIf { it.isNotBlank() }?.let { append(" It was taken in ").append(it).append('.') }
         val text = clip(screenText.trim(), MAX_SCREEN_CHARS)
         if (text.isNotEmpty()) append(" Text read from it:\n").append(text)
+        if (knownApp.isNullOrBlank() && hints.isNotEmpty()) {
+            append("\nThe screen has words typical of: ").append(hints.joinToString(" or ")).append('.')
+        }
         append("\n\nAnswer in exactly this format:\n")
         append("Title: <3-8 words: what this is>\n")
         append("Summary: <one sentence with the key facts: names, amounts in ₹, dates, items>\n")
-        append("App: <the name of the app shown, like WhatsApp, Instagram, Google Pay, PhonePe, Chrome, YouTube, Gmail, Amazon>\n")
+        append("App: <the app whose screen this is, like WhatsApp, Instagram, Google Pay, Chrome, YouTube, Gmail; not a brand or site in the content>\n")
         append("Keywords: <6 to 10 lowercase search words about the content, no times>")
     }
 

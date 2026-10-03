@@ -1,7 +1,6 @@
 package com.pdrajan.dotscreenshots.index
 
 import android.content.Context
-import com.pdrajan.dot.engine.AppLookClassifier
 import com.pdrajan.dot.engine.CategoryClassifier
 import com.pdrajan.dot.ml.ClipModel
 import com.pdrajan.dot.ml.PromptBank
@@ -43,20 +42,6 @@ class ModelHub(private val context: Context, private val scope: CoroutineScope) 
             classifier ?: withContext(Dispatchers.Default) { PromptBank.classifier(context, clip) }.also {
                 classifier = it
                 // Prompt embeddings are cached on disk; indexing doesn't need the text encoder after this.
-                clip.releaseText()
-            }
-        }
-    }
-
-    private var appLook: AppLookClassifier? = null
-
-    /** CLIP prompts for "which app does this look like", embedded once and cached on disk. */
-    suspend fun appLook(): AppLookClassifier? {
-        appLook?.let { return it }
-        val clip = clip() ?: return null
-        return mutex.withLock {
-            appLook ?: withContext(Dispatchers.Default) { PromptBank.appLook(context, clip) }.also {
-                appLook = it
                 clip.releaseText()
             }
         }

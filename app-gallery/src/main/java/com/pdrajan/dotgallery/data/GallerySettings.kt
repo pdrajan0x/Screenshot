@@ -25,7 +25,7 @@ class GallerySettings(context: Context) {
     private val _readHindi = bool("read_hindi", true)
     val readHindi: StateFlow<Boolean> = _readHindi.asStateFlow()
 
-    private val _processing = MutableStateFlow(ProcessingPolicy.load(prefs, legacyChargingOnlyKey = "backlog_charging"))
+    private val _processing = MutableStateFlow(ProcessingPolicy.load(prefs))
     /** When analysing and describing may run (Settings → Processing). */
     val processing: StateFlow<ProcessingPolicy> = _processing.asStateFlow()
 

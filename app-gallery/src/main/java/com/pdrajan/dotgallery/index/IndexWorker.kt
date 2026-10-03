@@ -13,7 +13,7 @@ import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dotgallery.GalleryApp
 import java.time.Duration
 
-/** Same scheme as Dot Screenshots: new media on change, the backlog while charging. */
+/** Same scheme as Dot Screenshots: new media on change, then the rest, following Settings → Processing. */
 class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -23,29 +23,16 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val deadline = System.currentTimeMillis() + 8 * 60_000L
         runCatching { c.engine.sync() }
         val power = c.power
-        // Settings → Processing: background work at all, and when on battery.
+        // Settings → Processing: background work at all, and on battery only above the chosen level.
+        // Photos are finished a few at a time (analysis, then description and keywords), newest first.
         val blocker = power.blocker(foreground = false)
         val stopped = { isStopped || power.blocker(foreground = false) != null }
-        var indexed = 0
-        var described = 0
-        if (mode == MODE_NEW) {
-            // New photos are quick to analyse; that waits only if background processing is off.
-            if (c.settings.processing.value.background) indexed = c.engine.process(limit = 40, deadline = deadline) { isStopped }
-            if (blocker == null) {
-                described = c.describer.process(
-                    limit = 6, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline, foreground = false, isStopped = stopped,
-                )
-            }
-        } else if (blocker == null) {
+        var progressed = 0
+        if (blocker == null) {
             while (!stopped() && System.currentTimeMillis() < deadline) {
-                val n = c.engine.process(limit = 50, deadline = deadline, isStopped = stopped)
+                val n = c.processStep(userAsked = false, foreground = false, deadline = deadline, isStopped = stopped)
                 if (n == 0) break
-                indexed += n
-            }
-            while (!stopped() && System.currentTimeMillis() < deadline) {
-                val n = c.describer.process(limit = 10, deadline = deadline, foreground = false, isStopped = stopped)
-                if (n == 0) break
-                described += n
+                progressed += n
             }
         }
         if (mode == MODE_NEW) c.scheduler.watchForNewMedia(afterCurrent = true)
@@ -53,12 +40,11 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         // waits for the next app open or new photo instead of looping.
         val toRead = c.repo.counts().pending
         val toDescribe = if (c.describer.available) c.repo.captionCounts().second else 0
-        val progressed = indexed + described > 0 || mode == MODE_NEW
-        if (progressed && (toRead > 0 || toDescribe > 0) && c.settings.processing.value.background) {
+        if ((progressed > 0 || mode == MODE_NEW) && (toRead > 0 || toDescribe > 0) && c.settings.processing.value.background) {
             c.scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
         }
         DotLog.i(
-            "worker: $mode run finished · $indexed analysed, $described described" +
+            "worker: $mode run finished · $progressed items moved forward" +
                 (blocker?.let { " (paused: $it)" } ?: "") + " · $toRead to analyse, $toDescribe to describe",
         )
         return Result.success()

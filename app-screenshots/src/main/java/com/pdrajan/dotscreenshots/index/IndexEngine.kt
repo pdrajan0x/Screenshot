@@ -5,7 +5,6 @@ import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaAccess
 import com.pdrajan.dot.media.MediaPermissions
 import com.pdrajan.dot.media.MediaStoreSource
-import com.pdrajan.dot.ml.InstalledApps
 import com.pdrajan.dot.ml.ScreenshotAnalyzer
 import com.pdrajan.dot.ml.TextReader
 import com.pdrajan.dotscreenshots.data.Settings
@@ -31,8 +30,6 @@ class IndexEngine(
     private val settings: Settings,
     private val hub: ModelHub,
     private val media: MediaStoreSource,
-    /** Whether library-wide work may run now (app open or charging), not just new screenshots. */
-    heavyWorkAllowed: () -> Boolean,
 ) {
     private val _progress = MutableStateFlow(IndexProgress())
     val progress: StateFlow<IndexProgress> = _progress.asStateFlow()
@@ -50,7 +47,6 @@ class IndexEngine(
         val started = System.currentTimeMillis()
         val shots = media.screenshots()
         val result = repo.sync(shots)
-        apps.run()
         val counts = repo.counts()
         DotLog.i(
             "sync: ${shots.size} screenshots on device, ${result.added} new, ${result.removed} removed · " +
@@ -59,17 +55,14 @@ class IndexEngine(
         return result
     }
 
-    /** A source app for every screenshot: from its file name, set by the user, or the best guess. */
-    val apps = AppIdentification(context, repo, hub, InstalledApps(context), heavyWorkAllowed)
-
     /**
      * Analyses up to [limit] pending screenshots, newest first. Stops early at [deadline]
      * (epoch millis) or when [isStopped] says so. Returns how many were indexed successfully.
      */
-    suspend fun process(limit: Int, deadline: Long = Long.MAX_VALUE, isStopped: () -> Boolean = { false }): Int =
+    suspend fun process(limit: Int, deadline: Long = Long.MAX_VALUE, since: Long = 0L, isStopped: () -> Boolean = { false }): Int =
         batchLock.withLock {
             // Most wake-ups (any new image on the phone) find nothing to do: check before loading anything.
-            if (repo.ocrPendingCount() == 0 && repo.pending(1).isEmpty()) return 0
+            if (repo.ocrPendingCount() == 0 && repo.pending(1, since).isEmpty()) return 0
             var done = 0
             var failed = 0
             val batchStart = System.currentTimeMillis()
@@ -88,7 +81,7 @@ class IndexEngine(
                         DotLog.i("process: text model still downloading ($waitingForText screenshots waiting for text)")
                     }
                 }
-                val pending = repo.pending(limit)
+                val pending = repo.pending(limit, since)
                 if (pending.isEmpty()) return 0
                 DotLog.i("process: ${pending.size} pending in this batch")
                 _progress.value = IndexProgress(running = true, total = pending.size, preparing = true)
@@ -103,8 +96,7 @@ class IndexEngine(
                 t = System.currentTimeMillis()
                 val classifier = hub.classifier() ?: return 0
                 DotLog.i("process: category prompts ready in ${System.currentTimeMillis() - t} ms")
-                val appLook = runCatching { hub.appLook() }.onFailure { DotLog.e("process: app look prompts unavailable", it) }.getOrNull()
-                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier, appLook)
+                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier)
                 _progress.value = IndexProgress(running = true, total = pending.size)
                 var noText = 0
                 for (item in pending) {
@@ -147,8 +139,6 @@ class IndexEngine(
                 reader?.close()
                 _progress.value = IndexProgress()
             }
-            // New screenshots without an exact app get their best guess.
-            if (done - failed > 0) apps.run()
             // Successes only, so callers looping "while > 0" stop when a whole batch fails.
             done - failed
         }

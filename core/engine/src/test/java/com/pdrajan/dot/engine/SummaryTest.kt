@@ -51,16 +51,10 @@ class SummaryTest {
     }
 
     @Test
-    fun recognisesAppsFromLooksAndText() {
-        // CLIP's probabilities for the user's real WhatsApp screenshot.
-        val whatsappLook = mapOf("WhatsApp" to 0.753f, "Telegram" to 0.233f, "~other" to 0.005f)
-        assertEquals("WhatsApp", AppRecognizer.recognize("Deepanshu Arya\nbana di pure ?\nMessage", whatsappLook)?.app)
-        // Text alone.
-        assertEquals("Google Pay", AppRecognizer.recognize("Paid to Rahul\nGoogle transaction ID\nCICAgOj", null)?.app)
-        // Unclear look and no clues: no guess rather than a wrong one.
-        val unclear = mapOf("~gallery" to 0.24f, "YouTube" to 0.22f, "~browser" to 0.19f, "~other" to 0.15f)
-        assertNull(AppRecognizer.recognize("PHOTOS\nToday\nYesterday", unclear))
-        assertEquals("WhatsApp", AppRecognizer.canonical("WhatsApp Messenger"))
-        assertTrue(AppRecognizer.isBrowser("Chrome"))
+    fun browserPagesComeFromTheAddressBar() {
+        assertTrue(Browsers.isBrowser("Chrome"))
+        assertTrue(Browsers.isBrowser(null, "org.mozilla.firefox"))
+        assertEquals("https://google.com/search?q=8gb+ram+laptop", PageLink.inText("11:15\ngoogle.com/search?q=8gb+ram+laptop\nGoogle\n8gb ram laptop"))
+        assertEquals(listOf("chats"), Categories.forApp("WhatsApp"))
     }
 }

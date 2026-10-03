@@ -5,12 +5,13 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import androidx.core.net.toUri
-import com.pdrajan.dot.engine.AppIdentifier
 import com.pdrajan.dot.engine.Entity
 import com.pdrajan.dot.engine.EntityType
+import com.pdrajan.dot.engine.Browsers
+import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.engine.FtsQuery
+import com.pdrajan.dot.engine.PageLink
 import com.pdrajan.dot.engine.HybridRanker
-import com.pdrajan.dot.engine.KnownShot
 import com.pdrajan.dot.engine.QuantizedVector
 import com.pdrajan.dot.engine.ScreenshotSummary
 import com.pdrajan.dot.engine.VectorHit
@@ -102,7 +103,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
 
     private fun detail(id: Long): ShotDetail? {
         val row = db.rawQuery(
-            "SELECT $SHOT_COLUMNS, ocr_text, entities, note, summary, tags, page_url, app_source, app_confidence FROM shots WHERE id = ?",
+            "SELECT $SHOT_COLUMNS, ocr_text, entities, note, summary, tags, page_url, app_source FROM shots WHERE id = ?",
             arrayOf(id.toString()),
         ).use { c ->
             if (!c.moveToFirst()) return null
@@ -115,7 +116,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 tags = c.getString(SHOT_COLUMN_COUNT + 4),
                 pageUrl = c.getString(SHOT_COLUMN_COUNT + 5),
                 appSource = c.getString(SHOT_COLUMN_COUNT + 6),
-                appConfidence = if (c.isNull(SHOT_COLUMN_COUNT + 7)) null else c.getFloat(SHOT_COLUMN_COUNT + 7),
             )
         }
         val collections = db.rawQuery(
@@ -137,7 +137,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
             tags = row.tags?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty(),
             pageUrl = row.pageUrl,
             appSource = row.appSource,
-            appConfidence = row.appConfidence,
         )
     }
 
@@ -150,7 +149,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val tags: String?,
         val pageUrl: String?,
         val appSource: String?,
-        val appConfidence: Float?,
     )
 
     fun observeCounts(): Flow<IndexCounts> = observe { counts() }
@@ -200,10 +198,10 @@ class ShotsRepository(private val database: ShotsDatabase) {
     }
 
     /** Ids still waiting for analysis, newest first. */
-    suspend fun pending(limit: Int): List<PendingShot> = withContext(Dispatchers.IO) {
+    suspend fun pending(limit: Int, since: Long = 0L): List<PendingShot> = withContext(Dispatchers.IO) {
         db.rawQuery(
-            "SELECT id, uri, name, taken_at FROM shots WHERE state = ? ORDER BY taken_at DESC LIMIT ?",
-            arrayOf(IndexState.PENDING.code.toString(), limit.toString()),
+            "SELECT id, uri, name, taken_at FROM shots WHERE state = ? AND taken_at >= ? ORDER BY taken_at DESC LIMIT ?",
+            arrayOf(IndexState.PENDING.code.toString(), since.toString(), limit.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(PendingShot(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getLong(3))) } }
     }
 
@@ -494,10 +492,18 @@ class ShotsRepository(private val database: ShotsDatabase) {
     // ---------------------------------------------------------------- summaries (on-device model)
 
     /** Indexed screenshots still waiting for a summary, newest first; [since] limits to recent ones. */
+    /** One screenshot to summarise right away ("Summarise now"), once its text has been read. */
+    suspend fun summaryJob(id: Long): SummaryJob? = withContext(Dispatchers.IO) {
+        db.rawQuery(
+            "SELECT id, uri, CASE WHEN app_source IN ('file', 'user') THEN app END, COALESCE(ocr_text,''), name FROM shots WHERE id = ? AND state = ?",
+            arrayOf(id.toString(), IndexState.INDEXED.code.toString()),
+        ).use { c -> if (c.moveToFirst()) SummaryJob(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getString(3), c.getString(4)) else null }
+    }
+
     suspend fun summaryQueue(limit: Int, since: Long = 0L): List<SummaryJob> = withContext(Dispatchers.IO) {
         db.rawQuery(
-            // A shaky guess of the app would only mislead the summary.
-            "SELECT id, uri, CASE WHEN app_source IN ('usage', 'file', 'user') OR COALESCE(app_confidence, 0) >= 0.6 THEN app END, " +
+            // Only a certain app (file name, the user) is told to the AI; otherwise it names the app itself.
+            "SELECT id, uri, CASE WHEN app_source IN ('usage', 'file', 'user') THEN app END, " +
                 "COALESCE(ocr_text,''), name FROM shots WHERE state = ? AND summary_state = ? AND taken_at >= ? " +
                 "ORDER BY taken_at DESC LIMIT ?",
             arrayOf(IndexState.INDEXED.code.toString(), SUMMARY_PENDING.toString(), since.toString(), limit.toString()),
@@ -507,22 +513,26 @@ class ShotsRepository(private val database: ShotsDatabase) {
     }
 
     /**
-     * Stores what the vision model wrote. The app it named is kept as one more signal for the app
-     * guess: an uncertain app is guessed again with it (see [guessTargets]).
+     * Stores what the vision model wrote, including the app it says the screen belongs to (one of
+     * the phone's apps, or Lock screen / Home screen). That replaces any earlier guess; an app from
+     * the file name or picked by the user stays.
      */
-    suspend fun saveSummary(id: Long, summary: ScreenshotSummary) = withContext(Dispatchers.IO) {
+    suspend fun saveSummary(id: Long, summary: ScreenshotSummary, appPackage: String?) = withContext(Dispatchers.IO) {
         db.beginTransaction()
         try {
             db.update("shots", ContentValues().apply {
                 put("title", summary.title.ifBlank { null })
                 put("summary", summary.summary.ifBlank { null })
                 put("tags", summary.tags.joinToString(", ").ifEmpty { null })
-                put("model_app", summary.app)
                 put("summary_state", SUMMARY_DONE)
             }, "id = ?", arrayOf(id.toString()))
-            if (summary.app != null) {
-                db.execSQL("UPDATE shots SET app_confidence = NULL WHERE id = ? AND $UNCERTAIN_APP", arrayOf<Any>(id))
+            summary.app?.let { app ->
+                db.execSQL(
+                    "UPDATE shots SET app = ?, app_package = ?, app_source = 'model', app_confidence = NULL WHERE id = ? AND $UNCERTAIN_APP",
+                    arrayOf<Any?>(app, appPackage, id),
+                )
             }
+            afterAppKnown(id)
             rewriteFts(id)
             db.setTransactionSuccessful()
         } finally {
@@ -530,6 +540,26 @@ class ShotsRepository(private val database: ShotsDatabase) {
         }
         changed()
     }
+
+    /** With the app known: its categories (a chat app → Chats) and, for a browser, the page in the address bar. */
+    private fun afterAppKnown(id: Long) {
+        val (app, pkg, categories, url, text) = db.rawQuery(
+            "SELECT app, app_package, categories, page_url, COALESCE(ocr_text, '') FROM shots WHERE id = ?",
+            arrayOf(id.toString()),
+        ).use { c -> if (!c.moveToFirst()) return else Row5(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4)) }
+        if (app == null) return
+        val current = categories.split(',').filter { it.isNotEmpty() }
+        val merged = (current + Categories.forApp(app)).distinct().take(3)
+        val page = url ?: if (Browsers.isBrowser(app, pkg)) PageLink.inText(text) else null
+        if (merged != current || page != url) {
+            db.update("shots", ContentValues().apply {
+                put("categories", if (merged.isEmpty()) "" else merged.joinToString(",", ",", ","))
+                put("page_url", page)
+            }, "id = ?", arrayOf(id.toString()))
+        }
+    }
+
+    private data class Row5(val app: String?, val pkg: String?, val categories: String, val url: String?, val text: String)
 
     suspend fun markSummaryFailed(id: Long) = withContext(Dispatchers.IO) {
         db.execSQL("UPDATE shots SET summary_state = ? WHERE id = ?", arrayOf<Any>(SUMMARY_FAILED, id))
@@ -559,86 +589,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
             arrayOf<Any?>(SUMMARY_DONE, label, SUMMARY_PENDING, label, packageName, source, id),
         )
         rewriteFts(id)
-    }
-
-    /** How many screenshots have a certain app (cheap: no embeddings loaded). */
-    fun knownAppCount(): Int =
-        db.rawQuery("SELECT COUNT(*) FROM shots WHERE app IS NOT NULL AND app_source IN ('usage', 'file', 'user')", null)
-            .use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
-
-    /** Whether any indexed screenshot still waits for its first app guess (cheap). */
-    fun hasUnguessedApps(): Boolean =
-        db.rawQuery(
-            "SELECT 1 FROM shots WHERE state = ? AND $UNCERTAIN_APP AND app_confidence IS NULL LIMIT 1",
-            arrayOf(IndexState.INDEXED.code.toString()),
-        ).use { it.moveToFirst() }
-
-    /** Screenshots whose app is certain, with their look, to learn from. */
-    suspend fun knownAppShots(): List<KnownShot> {
-        ensureVectors()
-        return withContext(Dispatchers.IO) {
-            db.rawQuery(
-                "SELECT id, app, app_package, taken_at FROM shots WHERE app IS NOT NULL AND app_source IN ('usage', 'file', 'user')",
-                null,
-            ).use { c ->
-                buildList {
-                    while (c.moveToNext()) {
-                        add(KnownShot(c.getString(1), c.getString(2), c.getLong(3), vectorIndex.vectorsOf(c.getLong(0)).orEmpty()))
-                    }
-                }
-            }
-        }
-    }
-
-    class GuessTarget(val id: Long, val takenAt: Long, val text: String, val crops: List<FloatArray>, val modelApp: String?)
-
-    /**
-     * Indexed screenshots whose app isn't certain, by id after [afterId]. With [all] false only
-     * the ones never guessed before.
-     */
-    suspend fun guessTargets(all: Boolean, afterId: Long, limit: Int): List<GuessTarget> {
-        ensureVectors()
-        return withContext(Dispatchers.IO) {
-            db.rawQuery(
-                "SELECT id, taken_at, COALESCE(ocr_text, ''), model_app FROM shots WHERE state = ? AND id > ? AND $UNCERTAIN_APP" +
-                    (if (all) "" else " AND app_confidence IS NULL") + " ORDER BY id LIMIT ?",
-                arrayOf(IndexState.INDEXED.code.toString(), afterId.toString(), limit.toString()),
-            ).use { c ->
-                buildList {
-                    while (c.moveToNext()) {
-                        val id = c.getLong(0)
-                        add(GuessTarget(id, c.getLong(1), c.getString(2), vectorIndex.vectorsOf(id).orEmpty(), c.getString(3)))
-                    }
-                }
-            }
-        }
-    }
-
-    /** Stores best guesses; returns how many screenshots changed app. */
-    suspend fun saveGuesses(guesses: List<Pair<Long, AppIdentifier.Result>>): Int = withContext(Dispatchers.IO) {
-        if (guesses.isEmpty()) return@withContext 0
-        var moved = 0
-        db.beginTransaction()
-        try {
-            for ((id, g) in guesses) {
-                val before = db.rawQuery("SELECT app FROM shots WHERE id = ? AND $UNCERTAIN_APP", arrayOf(id.toString())).use { c ->
-                    if (c.moveToFirst()) (c.getString(0) ?: "") else null
-                } ?: continue
-                db.execSQL(
-                    "UPDATE shots SET app = ?, app_package = ?, app_source = 'guess', app_confidence = ? WHERE id = ?",
-                    arrayOf<Any?>(g.label, g.packageName, g.confidence.toDouble(), id),
-                )
-                if (before != g.label) {
-                    rewriteFts(id)
-                    moved++
-                }
-            }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-        if (moved > 0) changed()
-        moved
     }
 
     /** Every app name in the library with its screenshot count, for the "which app" picker. */

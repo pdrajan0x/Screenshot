@@ -181,7 +181,8 @@ class ClipModel private constructor(
             val assets = context.assets
             val config = ClipConfig.parse(assets.open("clip/clip_config.json").bufferedReader().use { it.readText() })
             val cores = Runtime.getRuntime().availableProcessors()
-            return ClipModel(assets, config, threads = max(1, min(4, cores / 2)))
+            // Two threads: a photo still takes a fraction of a second, and the rest of the phone stays smooth.
+            return ClipModel(assets, config, threads = max(1, min(2, cores / 2)))
         }
 
         fun isAvailable(context: Context): Boolean =

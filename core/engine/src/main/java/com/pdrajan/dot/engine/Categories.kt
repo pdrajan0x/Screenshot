@@ -5,7 +5,7 @@ import kotlin.math.exp
 /**
  * An automatic screenshot category. Assigned from three signals:
  * visual similarity to [prompts] (CLIP zero-shot), [keywords] in the OCR text, and the
- * source [apps] when the file name reveals it. [synonyms] let a search for "movies" pull in the
+ * source [apps] (from the file name, or once the AI has named it). [synonyms] let a search for "movies" pull in the
  * whole category.
  */
 data class Category(
@@ -165,7 +165,17 @@ object Categories {
 
     fun byId(id: String): Category? = byId[id]
 
-    /** Category ids a search query is asking for, e.g. "movies" → `movies`. */
+    /** Categories that follow from the app alone (WhatsApp → chats, PhonePe → payments). */
+    fun forApp(app: String): List<String> {
+        val a = app.lowercase()
+        return ALL.filter { c -> c.apps.any { appMatches(a, it) } }.map { it.id }
+    }
+
+    // Short names like "x" or "ola" must match a whole word, not "netflix" or "motorola".
+    internal fun appMatches(app: String, name: String): Boolean =
+        if (name.length >= 5) app.contains(name)
+        else app.split(' ', '.', '_', '-').any { it == name }
+
     /**
      * The categories a search asks for as a whole: only when every word names the category
      * ("payments", "upi receipts", "my chats"). A thing inside a category ("shoes", "train",
@@ -227,10 +237,7 @@ class CategoryClassifier(
         }
     }
 
-    // Short names like "x" or "ola" must match a whole word, not "netflix" or "motorola".
-    private fun appMatches(app: String, name: String): Boolean =
-        if (name.length >= 5) app.contains(name)
-        else app.split(' ', '.', '_', '-').any { it == name }
+    private fun appMatches(app: String, name: String) = Categories.appMatches(app, name)
 
     /** Softmax over categories + background, using each item's best crop/prompt pairing. */
     fun visualProbabilities(cropEmbeddings: List<FloatArray>): Map<String, Float> {

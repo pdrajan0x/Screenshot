@@ -39,6 +39,9 @@ class VisionPromptsTest {
         val prompt = VisionPrompts.screenshot("Deepanshu Arya\nMessage", "WhatsApp")
         assertTrue(prompt.startsWith("This is a phone screenshot. It was taken in WhatsApp. Text read from it:\nDeepanshu Arya"))
         assertTrue(VisionPrompts.screenshot("", null).startsWith("This is a phone screenshot.\n\nAnswer"))
+        // Interface-word hints help the AI name the app, unless the app is already known.
+        assertTrue(VisionPrompts.screenshot("Issues\nPull requests", null, listOf("GitHub")).contains("The screen has words typical of: GitHub."))
+        assertTrue("typical of" !in VisionPrompts.screenshot("Issues\nPull requests", "GitHub", listOf("GitHub")))
     }
 
     @Test

@@ -61,8 +61,8 @@ fun MediaThumbnail(
     sizePx: Int = 360,
     onClick: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
-    /** Already described by the AI: a tiny red dot in the corner. */
-    processed: Boolean = false,
+    /** Not processed by the AI yet: a tiny red dot in the corner (it goes away once done). */
+    pending: Boolean = false,
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val scale by animateFloatAsState(if (selected) 0.86f else 1f, label = "select-scale")
@@ -90,7 +90,7 @@ fun MediaThumbnail(
                 modifier = Modifier.fillMaxSize(),
             )
             overlay()
-            if (processed && !selectionMode) ProcessedDot(Modifier.align(Alignment.BottomEnd))
+            if (pending && !selectionMode) PendingDot(Modifier.align(Alignment.BottomEnd))
         }
         if (selectionMode) {
             SelectionCheck(selected, Modifier.align(Alignment.TopStart).padding(8.dp))

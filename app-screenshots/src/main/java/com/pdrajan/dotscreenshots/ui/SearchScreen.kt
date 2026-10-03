@@ -173,6 +173,135 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
 
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            // Results above, the search field at the bottom within thumb reach (it rides above the keyboard).
+            Column(Modifier.weight(1f).fillMaxWidth()) {
+                if (ui.query.isBlank()) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        if (recent.isNotEmpty()) {
+                            SectionLabel("Recent", Modifier.padding(horizontal = 20.dp)) {
+                                TextButton(onClick = vm::clearRecent) { Text("Clear") }
+                            }
+                            recent.forEach { q ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { vm.onQueryChange(q) }
+                                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(Icons.Rounded.History, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(Modifier.width(16.dp))
+                                    Text(q, style = MaterialTheme.typography.bodyLarge)
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                        }
+                        SectionLabel("Try", Modifier.padding(horizontal = 20.dp))
+                        FlowRow(
+                            Modifier.padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            listOf("car", "movie", "UPI payment", "food", "ticket", "dog").forEach { s ->
+                                DotChip(s, onClick = { vm.onQueryChange(s) })
+                            }
+                        }
+                        if (categoryCounts.isNotEmpty()) {
+                            Spacer(Modifier.height(16.dp))
+                            SectionLabel("Categories", Modifier.padding(horizontal = 20.dp))
+                            FlowRow(
+                                Modifier.padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                categoryCounts.entries.sortedByDescending { it.value }.forEach { (id, n) ->
+                                    val label = Categories.byId(id)?.label ?: id
+                                    DotChip(label, onClick = { vm.onQueryChange(Categories.byId(id)?.synonyms?.firstOrNull() ?: label) }, count = n)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            when {
+                                ui.searching && ui.hits.isEmpty() -> "Searching…"
+                                else -> "${ui.hits.size} ${if (ui.hits.size == 1) "result" else "results"}"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (ui.searching || ui.visualPending) DotLoader()
+                    }
+                    if (!ui.searching && !ui.visualPending && ui.hits.isEmpty()) {
+                        DotEmptyState(
+                            title = "Nothing found",
+                            message = "Try other words, or describe what's in the picture — like \"red car\" or \"movie poster\".",
+                            icon = Icons.Rounded.SearchOff,
+                        )
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            contentPadding = PaddingValues(bottom = 24.dp),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            val snippet = ui.hits.firstOrNull { it.snippet != null }?.snippet
+                            if (snippet != null) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    Text(
+                                        "“$snippet”",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
+                            items(ui.hits, key = { it.shot.id }) { hit ->
+                                ShotThumb(
+                                    shot = hit.shot,
+                                    selected = false,
+                                    selectionMode = false,
+                                    onClick = {
+                                        vm.submit()
+                                        onOpenShot(hit.shot.id)
+                                    },
+                                    overlay = {
+                                        val tag = when {
+                                            MatchReason.NOTE in hit.reasons -> "note"
+                                            MatchReason.TEXT in hit.reasons -> "text"
+                                            MatchReason.VISUAL in hit.reasons -> "visual"
+                                            else -> null
+                                        }
+                                        hit.shot.title?.let { title ->
+                                            Box(
+                                                Modifier
+                                                    .align(Alignment.BottomCenter)
+                                                    .fillMaxWidth()
+                                                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))))
+                                                    .padding(start = 8.dp, end = 8.dp, top = 18.dp, bottom = 6.dp),
+                                            ) {
+                                                Text(title, style = MaterialTheme.typography.labelSmall, color = Color.White, maxLines = 2)
+                                            }
+                                        }
+                                        if (tag != null) {
+                                            DotTag(tag, Modifier.align(Alignment.TopStart).padding(6.dp), accent = tag == "visual")
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             DotSearchField(
                 value = ui.query,
                 onValueChange = vm::onQueryChange,
@@ -183,137 +312,8 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                     vm.submit()
                     keyboard?.hide()
                 },
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.imePadding().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
             )
-
-            if (ui.query.isBlank()) {
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .imePadding()
-                        .navigationBarsPadding(),
-                ) {
-                    if (recent.isNotEmpty()) {
-                        SectionLabel("Recent", Modifier.padding(horizontal = 20.dp)) {
-                            TextButton(onClick = vm::clearRecent) { Text("Clear") }
-                        }
-                        recent.forEach { q ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { vm.onQueryChange(q) }
-                                    .padding(horizontal = 20.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(Icons.Rounded.History, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.width(16.dp))
-                                Text(q, style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
-                        Spacer(Modifier.height(12.dp))
-                    }
-                    SectionLabel("Try", Modifier.padding(horizontal = 20.dp))
-                    FlowRow(
-                        Modifier.padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        listOf("car", "movie", "UPI payment", "food", "ticket", "dog").forEach { s ->
-                            DotChip(s, onClick = { vm.onQueryChange(s) })
-                        }
-                    }
-                    if (categoryCounts.isNotEmpty()) {
-                        Spacer(Modifier.height(16.dp))
-                        SectionLabel("Categories", Modifier.padding(horizontal = 20.dp))
-                        FlowRow(
-                            Modifier.padding(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            categoryCounts.entries.sortedByDescending { it.value }.forEach { (id, n) ->
-                                val label = Categories.byId(id)?.label ?: id
-                                DotChip(label, onClick = { vm.onQueryChange(Categories.byId(id)?.synonyms?.firstOrNull() ?: label) }, count = n)
-                            }
-                        }
-                    }
-                }
-            } else {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        when {
-                            ui.searching && ui.hits.isEmpty() -> "Searching…"
-                            else -> "${ui.hits.size} ${if (ui.hits.size == 1) "result" else "results"}"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (ui.searching || ui.visualPending) DotLoader()
-                }
-                if (!ui.searching && !ui.visualPending && ui.hits.isEmpty()) {
-                    DotEmptyState(
-                        title = "Nothing found",
-                        message = "Try other words, or describe what's in the picture — like \"red car\" or \"movie poster\".",
-                        icon = Icons.Rounded.SearchOff,
-                    )
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        contentPadding = PaddingValues(bottom = 24.dp),
-                        modifier = Modifier.fillMaxSize().imePadding().navigationBarsPadding(),
-                    ) {
-                        val snippet = ui.hits.firstOrNull { it.snippet != null }?.snippet
-                        if (snippet != null) {
-                            item(span = { GridItemSpan(maxLineSpan) }) {
-                                Text(
-                                    "“$snippet”",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                                )
-                            }
-                        }
-                        items(ui.hits, key = { it.shot.id }) { hit ->
-                            ShotThumb(
-                                shot = hit.shot,
-                                selected = false,
-                                selectionMode = false,
-                                onClick = {
-                                    vm.submit()
-                                    onOpenShot(hit.shot.id)
-                                },
-                                overlay = {
-                                    val tag = when {
-                                        MatchReason.NOTE in hit.reasons -> "note"
-                                        MatchReason.TEXT in hit.reasons -> "text"
-                                        MatchReason.VISUAL in hit.reasons -> "visual"
-                                        else -> null
-                                    }
-                                    hit.shot.title?.let { title ->
-                                        Box(
-                                            Modifier
-                                                .align(Alignment.BottomCenter)
-                                                .fillMaxWidth()
-                                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))))
-                                                .padding(start = 8.dp, end = 8.dp, top = 18.dp, bottom = 6.dp),
-                                        ) {
-                                            Text(title, style = MaterialTheme.typography.labelSmall, color = Color.White, maxLines = 2)
-                                        }
-                                    }
-                                    if (tag != null) {
-                                        DotTag(tag, Modifier.align(Alignment.TopStart).padding(6.dp), accent = tag == "visual")
-                                    }
-                                },
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }

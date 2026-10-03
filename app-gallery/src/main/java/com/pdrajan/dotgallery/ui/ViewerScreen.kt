@@ -423,11 +423,19 @@ private fun InfoSheet(d: MediaDetail, onPerson: (Long) -> Unit, onAlbum: (Long) 
             }
         } else if (!m.isVideo) {
             divider()
-            Text(
-                "The AI hasn't described this photo yet.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            val c = galleryContainer()
+            var asked by remember(m.id) { mutableStateOf(false) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (asked) "Describing… a few seconds" else "Not described yet",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                if (!asked) {
+                    TextButton(onClick = { asked = true; c.describeNow(m.id) }) { Text("Describe now", color = DotTheme.extra.accent) }
+                }
+            }
         }
         if (d.people.isNotEmpty()) {
             divider()

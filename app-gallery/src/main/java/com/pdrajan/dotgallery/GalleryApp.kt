@@ -89,19 +89,33 @@ class GalleryContainer(val context: Context) {
         job?.cancel()
         job = scope.launch {
             runCatching { engine.sync() }
-            // The newest batch is always analysed while the app is open; the rest, and the AI
-            // descriptions (several seconds each), follow Settings → Processing.
-            engine.process(limit = 80)
-            while (isActive && allowed() && engine.process(limit = 80) > 0) Unit
-            while (isActive && describer.process(limit = DESCRIBE_BATCH) > 0) Unit
+            while (isActive && processStep(userAsked = false, foreground = true) > 0) Unit
             val left = repo.counts().pending > 0 || (describer.available && repo.captionCounts().second > 0)
             if (left && settings.processing.value.background) scheduler.scheduleBacklog()
         }
     }
 
-    private fun allowed() = power.blocker() == null
+    /**
+     * Finishes photos a few at a time, newest first: analyses up to [STEP] of them, then writes their
+     * descriptions and keywords, so each photo is complete moments after it is picked up. Follows
+     * Settings → Processing (battery level, battery saver, heat); [userAsked] is "Do it now".
+     * Returns how many photos moved forward.
+     */
+    suspend fun processStep(
+        userAsked: Boolean,
+        foreground: Boolean,
+        deadline: Long = Long.MAX_VALUE,
+        isStopped: () -> Boolean = { false },
+    ): Int {
+        // New photos always; the older library only while charging (or as chosen in Settings), so
+        // a photo is either finished or not started, never half done.
+        val since = power.since(userAsked)
+        val analysed = engine.process(limit = STEP, deadline = deadline, since = since, isStopped = isStopped)
+        val described = describer.process(limit = STEP, since = since, deadline = deadline, userAsked = userAsked, foreground = foreground, isStopped = isStopped)
+        return analysed + described
+    }
 
-    /** Left the app: work started from the screen stops (even "Process now"), unless the phone is charging. */
+    /** Left the app: work started from the screen stops (even "Do it now"), unless the phone is charging. */
     fun onBackground() {
         if (!_processingAll.value || !power.isCharging) job?.cancel()
     }
@@ -113,12 +127,16 @@ class GalleryContainer(val context: Context) {
         job = scope.launch {
             try {
                 runCatching { engine.sync() }
-                while (isActive && engine.process(limit = 50) > 0) Unit
-                while (isActive && describer.process(limit = DESCRIBE_BATCH, userAsked = true) > 0) Unit
+                while (isActive && processStep(userAsked = true, foreground = true) > 0) Unit
             } finally {
                 _processingAll.value = false
             }
         }
+    }
+
+    /** The viewer's "Describe now": this photo, right away, whatever the battery rules say. */
+    fun describeNow(id: Long) {
+        scope.launch { describer.describeNow(id) }
     }
 
     /** Downloads the AI model (about 1.3 GB, resumable), then starts describing. */
@@ -145,6 +163,6 @@ class GalleryContainer(val context: Context) {
     }
 
     private companion object {
-        const val DESCRIBE_BATCH = 10
+        const val STEP = 4
     }
 }

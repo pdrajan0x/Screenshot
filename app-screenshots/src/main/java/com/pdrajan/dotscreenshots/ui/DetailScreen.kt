@@ -98,7 +98,7 @@ import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.IndexState
 import com.pdrajan.dotscreenshots.data.Shot
 import com.pdrajan.dotscreenshots.data.ShotDetail
-import com.pdrajan.dotscreenshots.index.AppIdentification
+import com.pdrajan.dot.engine.AppNames
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -164,10 +164,12 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
 
     fun forget(id: Long) = viewModelScope.launch { c.repo.forget(listOf(id)) }
 
-    suspend fun appChoices(): List<AppIdentification.AppChoice> = c.engine.apps.choices()
+    suspend fun appChoices(): List<AppNames.Choice> = c.appChoices()
 
     /** The user says which app it's from; similar screenshots are re-guessed with that in mind. */
-    fun setApp(id: Long, choice: AppIdentification.AppChoice) = c.setApp(id, choice.label, choice.packageName)
+    fun setApp(id: Long, choice: AppNames.Choice) = c.setApp(id, choice.label, choice.packageName)
+
+    fun summariseNow(id: Long) = c.summariseNow(id)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -448,6 +450,18 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
                 Spacer(Modifier.height(10.dp))
                 Text(summary, style = MaterialTheme.typography.bodyMedium)
             }
+            if (!d.shot.summarized && d.shot.state == IndexState.INDEXED) {
+                var asked by remember(d.shot.id) { mutableStateOf(false) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (asked) "Summarising… a few seconds" else "Not summarised yet",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (!asked) TextButton(onClick = { asked = true; vm.summariseNow(d.shot.id) }) { Text("Summarise now", color = DotTheme.extra.accent) }
+                }
+            }
             d.pageUrl?.let { url ->
                 Spacer(Modifier.height(12.dp))
                 val host = runCatching { Uri.parse(url).host?.removePrefix("www.") }.getOrNull() ?: "page"
@@ -560,18 +574,14 @@ private fun formatBytes(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-/** Which app the screenshot is from, and how sure that is; tap to correct it. */
+/** Which app the screenshot is from (from the file name, the user, or named by the AI); tap to correct it. */
 @Composable
 private fun AppLine(d: ShotDetail, onClick: () -> Unit) {
     val app = d.shot.app
-    // Recognised from clear clues (older versions) without a stored confidence: fairly sure.
-    val confidence = d.appConfidence ?: if (d.appSource == "visual" || d.appSource == "model") 0.7f else 0f
-    val text = if (app == null) {
-        "Which app is this from?"
-    } else when {
-        !d.appGuessed -> app
-        confidence >= 0.6f -> "Probably $app"
-        else -> "Maybe $app"
+    val text = when {
+        app == null -> "Which app is this from?"
+        d.appSource == "model" -> "$app · named by AI"
+        else -> app
     }
     Row(
         Modifier.clip(MaterialTheme.shapes.small).clickable(onClick = onClick).padding(vertical = 6.dp),
@@ -581,18 +591,18 @@ private fun AppLine(d: ShotDetail, onClick: () -> Unit) {
         Spacer(Modifier.width(6.dp))
         Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(8.dp))
-        Text(if (app == null || d.appGuessed) "Set app" else "Change", style = MaterialTheme.typography.labelMedium, color = DotTheme.extra.accent)
+        Text(if (app == null) "Set app" else "Change", style = MaterialTheme.typography.labelMedium, color = DotTheme.extra.accent)
     }
 }
 
 @Composable
 private fun AppPickerDialog(
     current: String?,
-    loadChoices: suspend () -> List<AppIdentification.AppChoice>,
-    onPick: (AppIdentification.AppChoice) -> Unit,
+    loadChoices: suspend () -> List<AppNames.Choice>,
+    onPick: (AppNames.Choice) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var choices by remember { mutableStateOf<List<AppIdentification.AppChoice>?>(null) }
+    var choices by remember { mutableStateOf<List<AppNames.Choice>?>(null) }
     var query by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { choices = loadChoices() }
     val q = query.trim()
@@ -602,12 +612,6 @@ private fun AppPickerDialog(
         title = { Text("Which app is this from?") },
         text = {
             Column {
-                Text(
-                    "Similar screenshots will be matched to it too.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -626,7 +630,7 @@ private fun AppPickerDialog(
                             Text(
                                 "Use “$q”",
                                 color = DotTheme.extra.accent,
-                                modifier = Modifier.fillMaxWidth().clickable { onPick(AppIdentification.AppChoice(q, null)) }.padding(vertical = 12.dp),
+                                modifier = Modifier.fillMaxWidth().clickable { onPick(AppNames.Choice(q, null)) }.padding(vertical = 12.dp),
                             )
                         }
                     }

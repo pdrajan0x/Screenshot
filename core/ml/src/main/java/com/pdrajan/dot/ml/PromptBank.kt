@@ -1,8 +1,6 @@
 package com.pdrajan.dot.ml
 
 import android.content.Context
-import com.pdrajan.dot.engine.AppLookClassifier
-import com.pdrajan.dot.engine.AppRecognizer
 import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.engine.CategoryClassifier
 import com.pdrajan.dot.engine.PhotoTagger
@@ -28,7 +26,7 @@ object PromptBank {
         return CategoryClassifier(byCategory, background, clip.config.logitScale)
     }
 
-    /** Photo "Things" tags (Dot Gallery). */
+    /** Photo tags that pick out text-heavy photos for OCR (Dot Gallery). */
     fun photoTagger(context: Context, clip: ClipModel): PhotoTagger {
         val prompts = PhotoTags.ALL.flatMap { it.prompts } + PhotoTags.BACKGROUND
         val vectors = embed(context, clip, "phototags", prompts)
@@ -37,16 +35,6 @@ object PromptBank {
         for (t in PhotoTags.ALL) byTag[t.id] = t.prompts.map { vectors[i++] }
         val background = PhotoTags.BACKGROUND.map { vectors[i++] }
         return PhotoTagger(byTag, background, clip.config.logitScale)
-    }
-
-    /** "Which app does this look like" (Dot Screenshots), for screenshots without usage history. */
-    fun appLook(context: Context, clip: ClipModel): AppLookClassifier {
-        val prompts = AppRecognizer.VISUAL.values.flatten()
-        val vectors = embed(context, clip, "applook", prompts)
-        var i = 0
-        val byApp = LinkedHashMap<String, List<FloatArray>>()
-        for ((app, list) in AppRecognizer.VISUAL) byApp[app] = list.map { vectors[i++] }
-        return AppLookClassifier(byApp, clip.config.logitScale)
     }
 
     fun embed(context: Context, clip: ClipModel, name: String, prompts: List<String>): List<FloatArray> {
@@ -59,36 +47,6 @@ object PromptBank {
         dir.listFiles { f -> f.name.startsWith("$name-") }?.forEach { it.delete() }
         write(file, computed)
         return computed
-    }
-
-    /**
-     * Like [embed] for a list that changes over time (one prompt per installed app): every prompt
-     * is cached on its own, so only new ones go through the text encoder.
-     */
-    fun embedEach(context: Context, clip: ClipModel, name: String, prompts: Collection<String>): Map<String, FloatArray> {
-        val dim = clip.config.embedDim
-        val key = clip.config.modelName.hashCode().toUInt().toString(16)
-        val dir = File(context.noBackupFilesDir, "clip")
-        val file = File(dir, "$name-each-$key.bin")
-        val cache = LinkedHashMap<String, FloatArray>()
-        runCatching {
-            if (file.exists()) DataInputStream(file.inputStream().buffered()).use { input ->
-                if (input.readInt() == dim) repeat(input.readInt()) { cache[input.readUTF()] = FloatArray(dim) { input.readFloat() } }
-            }
-        }.onFailure { cache.clear() }
-        val missing = prompts.filter { it !in cache }.distinct()
-        if (missing.isNotEmpty()) {
-            missing.chunked(8).forEach { chunk -> chunk.zip(clip.embedTexts(chunk)).forEach { (p, v) -> cache[p] = v } }
-            dir.mkdirs()
-            val tmp = File(dir, file.name + ".tmp")
-            DataOutputStream(tmp.outputStream().buffered()).use { out ->
-                out.writeInt(dim)
-                out.writeInt(cache.size)
-                cache.forEach { (p, v) -> out.writeUTF(p); v.forEach { out.writeFloat(it) } }
-            }
-            tmp.renameTo(file)
-        }
-        return prompts.associateWith { cache.getValue(it) }
     }
 
     private fun read(file: File, count: Int, dim: Int): List<FloatArray>? = runCatching {

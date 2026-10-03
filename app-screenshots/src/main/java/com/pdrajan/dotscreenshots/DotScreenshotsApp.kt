@@ -11,7 +11,9 @@ import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import com.pdrajan.dot.design.CrashLog
+import com.pdrajan.dot.engine.AppNames
 import com.pdrajan.dot.llm.SharedModel
+import com.pdrajan.dot.ml.InstalledApps
 import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaStoreSource
 import com.pdrajan.dotscreenshots.data.Settings
@@ -32,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class DotScreenshotsApp : Application(), SingletonImageLoader.Factory {
 
@@ -46,15 +49,9 @@ class DotScreenshotsApp : Application(), SingletonImageLoader.Factory {
         container = AppContainer(this)
         container.scheduler.watchForNewScreenshots()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) {
-                container.visible = true
-                container.onForeground()
-            }
+            override fun onStart(owner: LifecycleOwner) = container.onForeground()
 
-            override fun onStop(owner: LifecycleOwner) {
-                container.visible = false
-                container.onBackground()
-            }
+            override fun onStop(owner: LifecycleOwner) = container.onBackground()
         })
     }
 
@@ -75,16 +72,13 @@ class AppContainer(val context: Context) {
     val hub = ModelHub(context, scope)
     val power = PowerGate(context) { settings.processing.value }
 
-    /** The app is on screen (between onStart and onStop). */
-    @Volatile var visible = false
-
-    // Library-wide passes (re-guessing every screenshot's app) wait until the app is open or charging.
-    val engine = IndexEngine(context, repo, settings, hub, media) { visible || power.isCharging }
+    val engine = IndexEngine(context, repo, settings, hub, media)
     val scheduler = IndexScheduler(context) { !settings.processing.value.onBattery }
+    val installed = InstalledApps(context)
 
     /** The AI model both Dot apps share (Download/AI Models): titles, summaries, keywords, app names. */
     val model = SharedModel.bundle(context)
-    val summaries = SummaryEngine(context, repo, model, power, scope)
+    val summaries = SummaryEngine(context, repo, model, power, scope, installed)
 
     /** Ids of the last search's results, so the viewer can swipe through them. */
     @Volatile var lastSearchIds: List<Long> = emptyList()
@@ -96,37 +90,43 @@ class AppContainer(val context: Context) {
     private var foregroundJob: Job? = null
     private var downloadJob: Job? = null
 
-    /**
-     * App opened: read new screenshots right away (quick). The AI summaries, and the older
-     * screenshots, follow Settings → Processing.
-     */
+    /** App opened: every screenshot is read and summarised, newest first, a few at a time. */
     fun onForeground() {
         foregroundJob?.cancel()
         foregroundJob = scope.launch {
             model.refresh()
             runCatching { engine.sync() }
-            engine.process(limit = FOREGROUND_BATCH)
-            while (isActive && allowed() && engine.process(limit = FOREGROUND_BATCH) > 0) Unit
-            var summarised = 0
-            while (isActive) {
-                val n = summaries.process(limit = SUMMARY_BATCH)
-                if (n == 0) break
-                summarised += n
-            }
-            if (summarised > 0) engine.apps.run()
+            while (isActive && processStep(userAsked = false, foreground = true) > 0) Unit
             val left = repo.counts().pending > 0 || (summaries.available && repo.summaryCounts().waiting > 0)
             if (left && settings.processing.value.background) scheduler.scheduleBacklog()
         }
     }
 
-    private fun allowed() = power.blocker() == null
+    /**
+     * Finishes screenshots a few at a time: reads up to [STEP] (text, look, categories), then the AI
+     * writes their title, summary and keywords and names the app, so each one is complete moments
+     * after it is picked up. The AI part follows Settings → Processing; [userAsked] is "Do it now".
+     */
+    suspend fun processStep(
+        userAsked: Boolean,
+        foreground: Boolean,
+        deadline: Long = Long.MAX_VALUE,
+        isStopped: () -> Boolean = { false },
+    ): Int {
+        // New screenshots always; older ones only while charging (or as chosen in Settings), so a
+        // screenshot is either finished or not started, never half done.
+        val since = power.since(userAsked)
+        val read = engine.process(limit = STEP, deadline = deadline, since = since, isStopped = isStopped)
+        val summarised = summaries.process(limit = STEP, since = since, deadline = deadline, userAsked = userAsked, foreground = foreground, isStopped = isStopped)
+        return read + summarised
+    }
 
-    /** Left the app: work started from the screen stops (even "Process now"), unless the phone is charging. */
+    /** Left the app: work started from the screen stops (even "Do it now"), unless the phone is charging. */
     fun onBackground() {
         if (!_backlogRunning.value || !power.isCharging) foregroundJob?.cancel()
     }
 
-    /** "Process now": read every pending screenshot, then write every summary, while the app stays open. */
+    /** "Do it now": everything, whatever the battery rules say, while the app stays open. */
     fun processAllNow() {
         if (_backlogRunning.value) return
         foregroundJob?.cancel()
@@ -134,13 +134,16 @@ class AppContainer(val context: Context) {
         foregroundJob = scope.launch {
             try {
                 runCatching { engine.sync() }
-                while (isActive && engine.process(limit = 50) > 0) Unit
-                while (isActive && summaries.process(limit = SUMMARY_BATCH, userAsked = true) > 0) Unit
-                engine.apps.run()
+                while (isActive && processStep(userAsked = true, foreground = true) > 0) Unit
             } finally {
                 _backlogRunning.value = false
             }
         }
+    }
+
+    /** "Summarise now" in the viewer: this screenshot right away. */
+    fun summariseNow(id: Long) {
+        scope.launch { summaries.summariseNow(id) }
     }
 
     fun stopProcessing() {
@@ -161,16 +164,21 @@ class AppContainer(val context: Context) {
         downloadJob?.cancel()
     }
 
-    /** The user set a screenshot's app; guesses for the rest are redone with it as an example. */
+    /** The user picked the screenshot's app. */
     fun setApp(id: Long, label: String, packageName: String?) {
-        scope.launch {
-            repo.setAppByUser(id, label, packageName)
-            engine.apps.run(relearn = true)
-        }
+        scope.launch { repo.setAppByUser(id, label, packageName) }
+    }
+
+    /** Apps to choose from when correcting one: the library's apps first, then the phone's, then the lock / home screen. */
+    suspend fun appChoices(): List<AppNames.Choice> = withContext(Dispatchers.IO) {
+        val phone = runCatching { installed.launchable() }.getOrDefault(emptyList()).map { AppNames.Choice(it.label, it.packageName) }
+        val byLabel = phone.associateBy { it.label }
+        val inLibrary = repo.appLabels().map { (label, _) -> byLabel[label] ?: AppNames.Choice(label, null) }
+        (inLibrary + phone + AppNames.Choice(AppNames.LOCK_SCREEN, null) + AppNames.Choice(AppNames.HOME_SCREEN, null))
+            .distinctBy { it.label.lowercase() }
     }
 
     private companion object {
-        const val FOREGROUND_BATCH = 60
-        const val SUMMARY_BATCH = 10
+        const val STEP = 4
     }
 }

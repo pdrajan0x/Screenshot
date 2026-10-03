@@ -28,37 +28,19 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
         runCatching { container.engine.sync() }
 
-        // Settings → Processing decides whether the AI model (seconds of full CPU per screenshot)
-        // may run with the app closed: never with background processing off, on battery only when
-        // allowed and above the chosen level. Unplugging or a warm phone stops it mid-batch.
+        // Settings → Processing: background work at all, and on battery only above the chosen level.
+        // Screenshots are finished a few at a time (read, then summary, keywords and app), newest first.
         val power = container.power
         val blocker = power.blocker(foreground = false)
         val stopped = { isStopped || power.blocker(foreground = false) != null }
-        var indexed = 0
-        var summarised = 0
-        if (mode == MODE_NEW) {
-            // Reading new screenshots is quick; it waits only if background processing is off.
-            if (container.settings.processing.value.background) {
-                indexed = container.engine.process(limit = 30, deadline = deadline) { isStopped }
-            }
-            if (blocker == null) {
-                summarised = container.summaries.process(
-                    limit = 3, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline, foreground = false, isStopped = stopped,
-                )
-            }
-        } else if (blocker == null) {
+        var progressed = 0
+        if (blocker == null) {
             while (!stopped() && System.currentTimeMillis() < deadline) {
-                val n = container.engine.process(limit = 50, deadline = deadline, isStopped = stopped)
+                val n = container.processStep(userAsked = false, foreground = false, deadline = deadline, isStopped = stopped)
                 if (n == 0) break
-                indexed += n
-            }
-            while (!stopped() && System.currentTimeMillis() < deadline) {
-                val n = container.summaries.process(limit = 5, deadline = deadline, foreground = false, isStopped = stopped)
-                if (n == 0) break
-                summarised += n
+                progressed += n
             }
         }
-        if (summarised > 0) container.engine.apps.run()
 
         val toRead = container.repo.counts().pending
         val toSummarise = if (container.summaries.available) container.repo.summaryCounts().waiting else 0
@@ -66,12 +48,11 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         if (mode == MODE_NEW) scheduler.watchForNewScreenshots(afterCurrent = true)
         // Only chain another backlog run when this one got somewhere; a run that did nothing
         // (a persistent error) waits for the next app open or screenshot instead of looping.
-        val progressed = indexed + summarised > 0 || mode == MODE_NEW
-        if (progressed && (toRead > 0 || toSummarise > 0) && container.settings.processing.value.background) {
+        if ((progressed > 0 || mode == MODE_NEW) && (toRead > 0 || toSummarise > 0) && container.settings.processing.value.background) {
             scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
         }
         DotLog.i(
-            "worker: $mode run finished · $indexed read, $summarised summarised" +
+            "worker: $mode run finished · $progressed items moved forward" +
                 (blocker?.let { " (paused: $it)" } ?: "") + " · $toRead to read, $toSummarise to summarise",
         )
         return Result.success()

@@ -42,12 +42,10 @@ data class ShotDetail(
     val tags: List<String> = emptyList(),
     /** For browser screenshots: the page that was open. */
     val pageUrl: String? = null,
-    /** How the source app was found: usage, file, user, visual, model or guess. */
+    /** How the source app was found: file, user or model (older versions: usage, visual, guess). */
     val appSource: String? = null,
-    /** For guessed apps: how sure the guess is (0–1). */
-    val appConfidence: Float? = null,
 ) {
-    /** The app is a guess rather than known for sure. */
+    /** The app isn't certain (not from the file name or the user). */
     val appGuessed: Boolean get() = appSource == null || appSource == "guess" || appSource == "model" || appSource == "visual"
 }
 

@@ -69,4 +69,8 @@ object PageLink {
         }
         return null
     }
+
+    /** The page a browser screenshot shows, from its stored text (OCR keeps screen order, the address bar first). */
+    fun inText(text: String): String? =
+        find(text.lineSequence().filter { it.isNotBlank() }.take(4).map { OcrLine(it, 0.05f, 0.08f) }.toList(), browser = true)
 }

@@ -3,6 +3,7 @@ package com.pdrajan.dotgallery.index
 import android.content.Context
 import com.pdrajan.dot.engine.VisionPrompts
 import com.pdrajan.dot.llm.LlamaEngine
+import com.pdrajan.dot.llm.LlmThread
 import com.pdrajan.dot.llm.ModelBundle
 import com.pdrajan.dot.llm.PowerGate
 import com.pdrajan.dot.media.DotLog
@@ -12,8 +13,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -47,6 +46,10 @@ class PhotoDescriber(
     private val _progress = MutableStateFlow<Pair<Int, Int>?>(null)
     val progress: StateFlow<Pair<Int, Int>?> = _progress.asStateFlow()
 
+    /** Why the model couldn't run, for the status strip; null when it works. */
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
     /** The model is downloaded. */
     val available: Boolean get() = model.isReady()
 
@@ -62,6 +65,22 @@ class PhotoDescriber(
         if (!available || blocked(userAsked, foreground)) return 0
         val jobs = repo.captionQueue(limit, since)
         if (jobs.isEmpty()) return 0
+        describeAll(jobs, deadline, userAsked, foreground, isStopped)
+    }
+
+    /** "Describe now" in the viewer: this photo right away (the user asked, so battery rules don't apply). */
+    suspend fun describeNow(id: Long): Boolean = lock.withLock {
+        val job = repo.captionJob(id) ?: return false
+        available && !blocked(userAsked = true, foreground = true) && describeAll(listOf(job), Long.MAX_VALUE, userAsked = true, foreground = true) { false } > 0
+    }
+
+    private suspend fun describeAll(
+        jobs: List<GalleryRepository.CaptionJob>,
+        deadline: Long,
+        userAsked: Boolean,
+        foreground: Boolean,
+        isStopped: () -> Boolean,
+    ): Int {
         releaseJob?.cancel()
         var done = 0
         var written = 0
@@ -71,16 +90,18 @@ class PhotoDescriber(
             val vlm = engine ?: withContext(Dispatchers.IO) { load() }?.also { engine = it }
             if (vlm == null) {
                 DotLog.e("describe: model could not be loaded")
+                _error.value = "The AI model couldn't start"
                 model.refresh()
                 return 0
             }
+            _error.value = null
             for (job in jobs) {
                 if (isStopped() || System.currentTimeMillis() > deadline || blocked(userAsked, foreground)) break
                 currentCoroutineContext().ensureActive()
                 val itemStart = System.currentTimeMillis()
                 try {
                     val rgb = withContext(Dispatchers.IO) { RgbImage.load(context.contentResolver, job.uri, VisionPrompts.PHOTO_IMAGE_TOKENS * VisionPrompts.PIXELS_PER_IMAGE_TOKEN) }
-                    val answer = VisionPrompts.parsePhoto(describe(vlm, rgb))
+                    val answer = VisionPrompts.parsePhoto(describe(vlm, rgb, power.gentle(userAsked)))
                     if (answer == null) {
                         repo.markCaptionFailed(job.id)
                     } else {
@@ -105,7 +126,7 @@ class PhotoDescriber(
             _progress.value = null
             scheduleRelease()
         }
-        written
+        return written
     }
 
     private fun load(): LlamaEngine? {
@@ -119,17 +140,9 @@ class PhotoDescriber(
         return llm
     }
 
-    /** Generation is a blocking native call: on cancellation, tell llama.cpp to stop right away. */
-    private suspend fun describe(vlm: LlamaEngine, image: RgbImage): String = coroutineScope {
-        val work = async(Dispatchers.Default) {
-            vlm.describe(image.bytes, image.width, image.height, VisionPrompts.PHOTO, VisionPrompts.PHOTO_GRAMMAR, VisionPrompts.MAX_TOKENS)
-        }
-        try {
-            work.await()
-        } catch (e: CancellationException) {
-            vlm.cancel()
-            throw e
-        }
+    /** The model call, on the AI thread; [gentle] keeps it out of the way of the phone's other work. */
+    private suspend fun describe(vlm: LlamaEngine, image: RgbImage, gentle: Boolean): String = LlmThread.run(vlm, gentle) {
+        it.describe(image.bytes, image.width, image.height, VisionPrompts.PHOTO, VisionPrompts.PHOTO_GRAMMAR, VisionPrompts.MAX_TOKENS)
     }
 
     /** Logs when descriptions pause or resume for battery or heat (once per change). */

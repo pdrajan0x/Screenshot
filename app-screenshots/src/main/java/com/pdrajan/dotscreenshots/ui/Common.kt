@@ -89,7 +89,7 @@ fun ShotThumb(
         cornerRadius = 4.dp,
         onClick = onClick,
         onLongClick = onLongClick,
-        processed = shot.summarized,
+        pending = !shot.summarized,
         overlay = overlay,
     )
 }

@@ -4,8 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import com.pdrajan.dot.engine.AppLookClassifier
-import com.pdrajan.dot.engine.AppRecognizer
+import com.pdrajan.dot.engine.Browsers
 import com.pdrajan.dot.engine.CategoryClassifier
 import com.pdrajan.dot.engine.Entity
 import com.pdrajan.dot.engine.EntityExtractor
@@ -19,11 +18,11 @@ enum class AppSource(val code: String) {
     USAGE("usage"),
     /** The phone maker put it in the file name. */
     FILE("file"),
-    /** Recognised from how the screen looks and its text. */
+    /** Earlier versions: recognised from how the screen looks and its text. */
     VISUAL("visual"),
-    /** Earlier versions: the old summary model named it. */
+    /** The AI model named it. */
     MODEL("model"),
-    /** Best guess from everything known (see AppIdentifier), with a confidence. */
+    /** Earlier versions: a look-alike guess. */
     GUESS("guess"),
     /** Picked by the user. */
     USER("user");
@@ -50,8 +49,8 @@ data class ScreenshotAnalysis(
 
 /**
  * Full on-device pipeline for one image: decode → OCR (with line positions) → CLIP crops →
- * source app (file name, or recognised; the library-wide guess comes later) → categories,
- * entities and page link.
+ * source app (only when the file name says it; the AI names it otherwise) → categories, entities
+ * and page link.
  */
 class ScreenshotAnalyzer(
     private val context: Context,
@@ -59,7 +58,6 @@ class ScreenshotAnalyzer(
     /** Null when ML Kit couldn't be set up; screenshots are then indexed without text, to be read later. */
     private val reader: TextReader?,
     private val classifier: CategoryClassifier,
-    private val appLook: AppLookClassifier? = null,
     private val extractor: EntityExtractor = EntityExtractor(),
 ) {
     private var loggedOcrError = false
@@ -88,8 +86,8 @@ class ScreenshotAnalyzer(
             }
             val text = ocr.text
             val crops = clip.embedImage(bitmap, maxCrops)
-            val app = resolveApp(displayName, text, crops)
-            val browser = AppRecognizer.isBrowser(app?.label, app?.packageName)
+            val app = appFromFileName(displayName)
+            val browser = Browsers.isBrowser(app?.label, app?.packageName)
             val pageUrl = PageLink.find(ocr.lines, browser)
             val categories = classifier.classify(crops, text, app?.label).categories
             val entities = extractor.extract(text)
@@ -112,13 +110,11 @@ class ScreenshotAnalyzer(
 
     private class ResolvedApp(val label: String, val packageName: String?, val source: AppSource)
 
-    private fun resolveApp(displayName: String, text: String, crops: List<FloatArray>): ResolvedApp? {
-        SourceApp.fromFileName(displayName)?.let { hint ->
-            hint.label?.let { return ResolvedApp(it, null, AppSource.FILE) }
-            hint.packageName?.let { return ResolvedApp(label(it), it, AppSource.FILE) }
-        }
-        val look = appLook?.probabilities(crops)
-        return AppRecognizer.recognize(text, look)?.let { ResolvedApp(it.app, null, AppSource.VISUAL) }
+    /** Some phone makers put the app in the screenshot's file name: then it's certain. Otherwise the AI names it later. */
+    private fun appFromFileName(displayName: String): ResolvedApp? {
+        val hint = SourceApp.fromFileName(displayName) ?: return null
+        hint.label?.let { return ResolvedApp(it, null, AppSource.FILE) }
+        return hint.packageName?.let { ResolvedApp(label(it), it, AppSource.FILE) }
     }
 
     private fun label(pkg: String): String = runCatching {

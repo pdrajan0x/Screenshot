@@ -95,9 +95,9 @@ class IndexEngine(
     }
 
     /** Analyses up to [limit] pending items; returns how many were indexed successfully. */
-    suspend fun process(limit: Int, deadline: Long = Long.MAX_VALUE, isStopped: () -> Boolean = { false }): Int = lock.withLock {
+    suspend fun process(limit: Int, deadline: Long = Long.MAX_VALUE, since: Long = 0L, isStopped: () -> Boolean = { false }): Int = lock.withLock {
         requeueWhenTextModelReady()
-        val pending = repo.pending(limit)
+        val pending = repo.pending(limit, since)
         if (pending.isEmpty()) return 0
         DotLog.i("process: ${pending.size} pending in this batch")
         _progress.value = IndexProgress(running = true, total = pending.size, preparing = true)

@@ -102,6 +102,8 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
     val lastError: StateFlow<String?> = c.engine.lastError
     val summaryProgress: StateFlow<IndexProgress> = c.summaries.progress
     val summaryCounts = c.repo.observeSummaryCounts().stateIn(viewModelScope, started, SummaryCounts(0, 0))
+    val aiError: StateFlow<String?> = c.summaries.error
+    fun waitingFor(): String? = c.power.blocker() ?: if (!c.power.backlogAllowed()) "older ones are done while charging" else null
     val backlogRunning: StateFlow<Boolean> = c.backlogRunning
     val columns: StateFlow<Int> = c.settings.gridColumns
     val modelAvailable: Boolean get() = c.hub.available
@@ -188,6 +190,7 @@ fun HomeScreen(
     val lastError by vm.lastError.collectAsStateWithLifecycle()
     val summaryProgress by vm.summaryProgress.collectAsStateWithLifecycle()
     val summaryCounts by vm.summaryCounts.collectAsStateWithLifecycle()
+    val aiError by vm.aiError.collectAsStateWithLifecycle()
     var diagnostics by remember { mutableStateOf(false) }
     val backlogRunning by vm.backlogRunning.collectAsStateWithLifecycle()
     val columns by vm.columns.collectAsStateWithLifecycle()
@@ -233,6 +236,15 @@ fun HomeScreen(
                     onShare = { context.startSafely(MediaActions.shareIntent(vm.selectedUris())) },
                     onDelete = { deleter.delete(vm.selectedUris()) { ok -> if (ok) vm.forgetSelection() } },
                 )
+            } else if (!selectionMode) {
+                // Search sits at the bottom, within thumb reach.
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    DotSearchPill(
+                        "Search your screenshots",
+                        onClick = onSearch,
+                        modifier = Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
+                    )
+                }
             }
         },
     ) { padding ->
@@ -252,21 +264,21 @@ fun HomeScreen(
                         IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
                     }
                 }
-                fullSpan("search") {
-                    DotSearchPill("Search your screenshots", onClick = onSearch, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
-                }
                 fullSpan("status") {
-                    Column {
-                        StatusStrip(progress, counts, summaryCounts.waiting, summaryProgress.running, backlogRunning, vm.modelAvailable, lastError, vm::processAll, vm::stopProcessing) { diagnostics = true }
-                        if (summaryProgress.running) {
-                            DotProgressStrip(
-                                if (summaryProgress.preparing) "Loading the AI model…"
-                                else "Writing summaries · ${summaryProgress.done} of ${summaryProgress.total}",
-                                Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                progress = if (summaryProgress.total > 0 && !summaryProgress.preparing) summaryProgress.done.toFloat() / summaryProgress.total else null,
-                            )
-                        }
-                    }
+                    StatusStrip(
+                        progress = progress,
+                        counts = counts,
+                        summaries = summaryCounts,
+                        summarising = summaryProgress.running,
+                        preparingAi = summaryProgress.preparing,
+                        backlogRunning = backlogRunning,
+                        modelAvailable = vm.modelAvailable,
+                        lastError = lastError ?: aiError,
+                        waitingFor = vm.waitingFor(),
+                        onProcessAll = vm::processAll,
+                        onStop = vm::stopProcessing,
+                        onDetails = { diagnostics = true },
+                    )
                 }
                 if (collections.isNotEmpty() || favoriteCount > 0) {
                     fullSpan("collections") {
@@ -327,41 +339,43 @@ private fun LazyGridScope.fullSpan(key: String, content: @Composable () -> Unit)
     item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
 }
 
+/** One line about the library: how many screenshots are left, why it's waiting, or what went wrong. */
 @Composable
 private fun StatusStrip(
     progress: IndexProgress,
     counts: IndexCounts,
-    toSummarise: Int,
+    summaries: SummaryCounts,
     summarising: Boolean,
+    preparingAi: Boolean,
     backlogRunning: Boolean,
     modelAvailable: Boolean,
     lastError: String?,
+    waitingFor: String?,
     onProcessAll: () -> Unit,
     onStop: () -> Unit,
     onDetails: () -> Unit,
 ) {
     val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+    val left = counts.pending + summaries.waiting
+    val total = counts.total + summaries.done + summaries.waiting
+    val done = counts.indexed + summaries.done
+    val stop: @Composable () -> Unit = { if (backlogRunning) TextButton(onClick = onStop) { Text("Stop", color = DotTheme.extra.accent) } }
     when {
-        !modelAvailable -> DotProgressStrip("This build has no AI model; only basic listing works.", modifier)
-        progress.preparing -> DotProgressStrip("Preparing the AI model… the first time takes a minute", modifier)
-        backlogRunning -> DotProgressStrip(
-            text = "Processing all · ${counts.indexed} of ${counts.total}",
-            modifier = modifier,
-            progress = if (counts.total > 0) counts.indexed.toFloat() / counts.total else null,
-            action = { TextButton(onClick = onStop) { Text("Stop", color = DotTheme.extra.accent) } },
-        )
-        progress.running -> DotProgressStrip(
-            text = "Reading new screenshots · ${progress.done} of ${progress.total}",
-            modifier = modifier,
-            progress = if (progress.total > 0) progress.done.toFloat() / progress.total else null,
-        )
+        !modelAvailable -> DotProgressStrip("This build has no image model; only basic listing works.", modifier)
+        progress.preparing || preparingAi -> DotProgressStrip("Preparing the AI model… the first time takes a minute", modifier)
         lastError != null -> DotProgressStrip(
-            text = "Couldn't read screenshots · $lastError",
+            text = lastError,
             modifier = modifier,
             action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
         )
-        counts.pending > 0 || (toSummarise > 0 && !summarising) -> DotProgressStrip(
-            text = if (counts.pending > 0) "${counts.pending} screenshots waiting to be read" else "$toSummarise screenshots waiting for a summary",
+        progress.running || summarising -> DotProgressStrip(
+            text = "AI is going through your screenshots · $left left",
+            modifier = modifier,
+            progress = if (total > 0) done.toFloat() / total else null,
+            action = stop,
+        )
+        left > 0 -> DotProgressStrip(
+            text = "$left screenshots waiting" + (waitingFor?.let { " · $it" } ?: ""),
             modifier = modifier,
             action = { TextButton(onClick = onProcessAll) { Text("Do it now", color = DotTheme.extra.accent) } },
         )
