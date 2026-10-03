@@ -76,6 +76,30 @@ class ImageQualityTest {
     }
 
     @Test
+    fun bucketedGroupingMatchesBruteForce() {
+        val rnd = java.util.Random(7)
+        val bases = List(40) { rnd.nextLong() }
+        val items = List(600) { i ->
+            var h = bases[rnd.nextInt(bases.size)]
+            repeat(rnd.nextInt(8)) { h = h xor (1L shl rnd.nextInt(64)) }
+            ImageQuality.Candidate(i.toLong(), h, rnd.nextInt(100_000).toLong(), pixels = rnd.nextInt(1000).toLong(), sizeBytes = i.toLong())
+        }
+        for (window in listOf(Long.MAX_VALUE, 5_000L)) {
+            val sorted = items.sortedBy { it.takenAt }
+            val parent = IntArray(sorted.size) { it }
+            fun find(i: Int): Int = if (parent[i] == i) i else find(parent[i]).also { parent[i] = it }
+            for (i in sorted.indices) for (j in i + 1 until sorted.size) {
+                if (sorted[j].takenAt - sorted[i].takenAt <= window && ImageQuality.hamming(sorted[i].hash, sorted[j].hash) <= 5) {
+                    parent[find(j)] = find(i)
+                }
+            }
+            val expected = sorted.indices.groupBy { find(it) }.values.filter { it.size > 1 }.map { g -> g.map { sorted[it].id }.toSet() }.toSet()
+            val actual = ImageQuality.duplicateGroups(items, maxDistance = 5, windowMillis = window).map { g -> g.map { it.id }.toSet() }.toSet()
+            assertEquals(expected, actual)
+        }
+    }
+
+    @Test
     fun tagQueryIntent() {
         assertEquals(listOf("dog", "cat"), PhotoTags.matchQuery("pets"))
         assertEquals(listOf("food"), PhotoTags.matchQuery("food"))

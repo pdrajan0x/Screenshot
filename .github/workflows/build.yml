@@ -144,10 +144,16 @@ jobs:
           set -o pipefail
           ./gradlew :app-screenshots:assembleRelease --console=plain 2>&1 | tee -a build.log
 
+      - name: Build Dot Gallery
+        run: |
+          set -o pipefail
+          ./gradlew :app-gallery:assembleRelease --console=plain 2>&1 | tee -a build.log
+
       - name: Collect APKs
         run: |
           mkdir -p dist
           cp app-screenshots/build/outputs/apk/release/*.apk dist/DotScreenshots.apk
+          cp app-gallery/build/outputs/apk/release/*.apk dist/DotGallery.apk
           ls -la dist
 
       - uses: actions/upload-artifact@v4

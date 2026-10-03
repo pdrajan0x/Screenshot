@@ -209,11 +209,26 @@ object ImageQuality {
             }
             return x
         }
-        for (i in sorted.indices) {
-            for (j in i + 1 until sorted.size) {
-                if (windowMillis != Long.MAX_VALUE && sorted[j].takenAt - sorted[i].takenAt > windowMillis) break
-                if (hamming(sorted[i].hash, sorted[j].hash) <= maxDistance) {
-                    parent[find(j)] = find(i)
+        // Pigeonhole: hashes within maxDistance bits agree exactly on at least one of
+        // maxDistance + 1 bands, so only items sharing a band value are compared.
+        val bands = maxDistance.coerceIn(0, 63) + 1
+        val width = 64 / bands
+        for (b in 0 until bands) {
+            val shift = b * width
+            val bits = if (b == bands - 1) 64 - shift else width
+            val mask = if (bits == 64) -1L else (1L shl bits) - 1
+            val buckets = HashMap<Long, MutableList<Int>>()
+            for (i in sorted.indices) buckets.getOrPut((sorted[i].hash ushr shift) and mask) { ArrayList() }.add(i)
+            for (bucket in buckets.values) {
+                for (x in 0 until bucket.size - 1) {
+                    val i = bucket[x]
+                    for (y in x + 1 until bucket.size) {
+                        val j = bucket[y]
+                        if (windowMillis != Long.MAX_VALUE && sorted[j].takenAt - sorted[i].takenAt > windowMillis) break
+                        if (find(i) != find(j) && hamming(sorted[i].hash, sorted[j].hash) <= maxDistance) {
+                            parent[find(j)] = find(i)
+                        }
+                    }
                 }
             }
         }
