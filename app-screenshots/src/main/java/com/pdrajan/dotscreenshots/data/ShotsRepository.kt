@@ -348,19 +348,26 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val crops = analysis.cropEmbeddings.map { QuantizedVector.of(it) }
         db.beginTransaction()
         try {
+            val previousSource = db.rawQuery("SELECT app_source FROM shots WHERE id = ?", arrayOf(id.toString())).use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+            // Re-reading a screenshot never undoes the user's choice, or an exact app the usage history no longer has.
+            val keepApp = previousSource == "user" || (previousSource == "usage" && analysis.appSource?.code != "usage")
             db.update("shots", ContentValues().apply {
                 put("state", IndexState.INDEXED.code)
                 put("ocr_text", analysis.ocrText)
-                put("app", analysis.sourceApp)
+                if (!keepApp) put("app", analysis.sourceApp)
                 put("categories", if (analysis.categories.isEmpty()) "" else analysis.categories.joinToString(",", ",", ","))
                 put("entities", encodeEntities(analysis.entities))
                 put("index_version", ShotsDatabase.INDEX_VERSION)
                 put("ocr_pending", if (analysis.ocrPending) 1 else 0)
                 put("indexed_at", System.currentTimeMillis())
-                put("app_source", analysis.appSource?.code)
-                put("app_package", analysis.appPackage)
-                // Guessed again by the next identification pass, with everything known by then.
-                putNull("app_confidence")
+                if (!keepApp) {
+                    put("app_source", analysis.appSource?.code)
+                    put("app_package", analysis.appPackage)
+                    // Guessed again by the next identification pass, with everything known by then.
+                    putNull("app_confidence")
+                }
                 put("page_url", analysis.pageUrl)
                 // New text: the summary (if any) is rewritten from it.
                 put("summary_state", SUMMARY_PENDING)
