@@ -65,11 +65,13 @@ class ClipModel private constructor(
     private val threads: Int,
 ) : Closeable {
 
-    private val env = OrtEnvironment.getEnvironment()
+    private val env = OrtEnvironment.getEnvironment().apply { runCatching { setTelemetry(false) } }
     private var imageSession: OrtSession? = null
     private var textSession: OrtSession? = null
     val tokenizer: ClipTokenizer by lazy {
-        assets.open("clip/bpe_simple_vocab_16e6.txt.gz").use { ClipTokenizer(it, config.contextLength) }
+        // The packager un-gzips "x.txt.gz" assets into "x.txt"; accept either.
+        val vocab = runCatching { assets.open("clip/bpe_simple_vocab_16e6.txt") }.getOrElse { assets.open("clip/bpe_simple_vocab_16e6.txt.gz") }
+        vocab.use { ClipTokenizer(it, config.contextLength) }
     }
     private val queryCache = object : LinkedHashMap<String, FloatArray>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>?) = size > 64

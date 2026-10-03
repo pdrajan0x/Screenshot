@@ -7,8 +7,6 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Personal sideloaded app: lets Xiaomi-style screenshot names (package ids) show real app names. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
@@ -30,6 +28,12 @@
             android:name="com.google.mlkit.vision.DEPENDENCIES"
             android:value="ocr,ocr_devanagari" />
 
+        <!-- ONNX Runtime 1.30 ships an HTTP telemetry uploader; everything here stays on the phone. -->
+        <provider
+            android:name="ai.onnxruntime.TelemetryInitializer"
+            android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
+            tools:node="remove" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -40,18 +44,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <receiver
-            android:name=".reminders.ReminderReceiver"
-            android:exported="false" />
-
-        <receiver
-            android:name=".reminders.BootReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-            </intent-filter>
-        </receiver>
     </application>
 </manifest>

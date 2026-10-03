@@ -32,6 +32,12 @@
             android:name="com.google.mlkit.vision.DEPENDENCIES"
             android:value="face,ocr_devanagari" />
 
+        <!-- ONNX Runtime 1.30 ships an HTTP telemetry uploader; everything here stays on the phone. -->
+        <provider
+            android:name="ai.onnxruntime.TelemetryInitializer"
+            android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
+            tools:node="remove" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

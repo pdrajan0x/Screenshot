@@ -40,8 +40,4 @@ object MediaPermissions {
             else -> MediaAccess.NONE
         }
     }
-
-    fun notificationsGranted(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 }

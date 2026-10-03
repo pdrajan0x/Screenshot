@@ -45,7 +45,7 @@ class FaceEngine(private val context: Context) : Closeable {
             .setMinFaceSize(0.06f)
             .build(),
     )
-    private val env = OrtEnvironment.getEnvironment()
+    private val env = OrtEnvironment.getEnvironment().apply { runCatching { setTelemetry(false) } }
     private val config = JSONObject(context.assets.open("faces/faces_config.json").bufferedReader().use { it.readText() })
     private val inputName = config.optString("input_name", "input.1")
     private val size = config.optInt("size", 112)

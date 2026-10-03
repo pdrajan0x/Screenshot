@@ -1,5 +1,6 @@
 package com.pdrajan.dot.engine
 
+import java.io.BufferedInputStream
 import java.io.InputStream
 import java.util.regex.Pattern
 import java.util.zip.GZIPInputStream
@@ -7,9 +8,10 @@ import java.util.zip.GZIPInputStream
 /**
  * Byte-level BPE tokenizer matching OpenCLIP's `SimpleTokenizer` (the one MobileCLIP2 uses).
  *
- * @param vocabGz `bpe_simple_vocab_16e6.txt.gz` as shipped with OpenCLIP / OpenAI CLIP.
+ * @param vocabStream `bpe_simple_vocab_16e6.txt(.gz)` as shipped with OpenCLIP / OpenAI CLIP, gzipped or
+ *   plain (the Android packager silently un-gzips `.gz` assets and drops the extension).
  */
-class ClipTokenizer(vocabGz: InputStream, val contextLength: Int = 77) {
+class ClipTokenizer(vocabStream: InputStream, val contextLength: Int = 77) {
 
     private val byteEncoder: Array<String>
     private val encoder: HashMap<String, Int>
@@ -24,7 +26,7 @@ class ClipTokenizer(vocabGz: InputStream, val contextLength: Int = 77) {
     init {
         val (byByte, inOrder) = bytesToUnicode()
         byteEncoder = byByte
-        val lines = GZIPInputStream(vocabGz).bufferedReader(Charsets.UTF_8).use { it.readText() }.split('\n')
+        val lines = maybeGunzip(vocabStream).bufferedReader(Charsets.UTF_8).use { it.readText() }.split('\n')
         val merges = lines.subList(1, 49152 - 256 - 2 + 1).map { line ->
             val parts = line.split(' ')
             parts[0] to parts[1]
@@ -133,6 +135,14 @@ class ClipTokenizer(vocabGz: InputStream, val contextLength: Int = 77) {
     companion object {
         const val SOT = "<start_of_text>"
         const val EOT = "<end_of_text>"
+
+        private fun maybeGunzip(input: InputStream): InputStream {
+            val buffered = BufferedInputStream(input)
+            buffered.mark(2)
+            val gzip = buffered.read() == 0x1f && buffered.read() == 0x8b
+            buffered.reset()
+            return if (gzip) GZIPInputStream(buffered) else buffered
+        }
 
         // OpenCLIP's pattern. `\s` is written as a plain space: input is already whitespace-cleaned,
         // and Android's regex engine does not support UNICODE_CHARACTER_CLASS.

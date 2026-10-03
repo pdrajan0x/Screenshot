@@ -34,7 +34,6 @@ data class ShotDetail(
     val entities: List<Entity>,
     val note: String,
     val collections: List<ShotCollection>,
-    val reminder: Reminder?,
 )
 
 data class ShotCollection(
@@ -43,8 +42,6 @@ data class ShotCollection(
     val count: Int,
     val cover: Uri?,
 )
-
-data class Reminder(val id: Long, val shotId: Long, val at: Long)
 
 data class SearchHit(
     val shot: Shot,

@@ -12,6 +12,15 @@ class ClipTokenizerTest {
     }
 
     @Test
+    fun acceptsPlainVocabLikeTheApkShips() {
+        val plain = java.util.zip.GZIPInputStream(File(System.getProperty("clip.vocab")).inputStream()).use { it.readBytes() }
+        val fromPlain = ClipTokenizer(plain.inputStream())
+        for (text in listOf("a photo of a dog", "UPI ₹499 paid", "मौसम")) {
+            assertEquals(tokenizer.tokenize(text).toList(), fromPlain.tokenize(text).toList())
+        }
+    }
+
+    @Test
     fun matchesOpenClipSimpleTokenizer() {
         val json = javaClass.getResource("/tokenizer_fixtures.json")!!.readText()
         val root = JSONObject(json)

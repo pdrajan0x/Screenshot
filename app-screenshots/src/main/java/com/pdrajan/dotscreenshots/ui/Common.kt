@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.provider.CalendarContract
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -26,7 +25,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.CurrencyRupee
@@ -237,16 +235,7 @@ fun entityActions(e: Entity): List<EntityAction> = when (e.type) {
         EntityAction(Icons.Rounded.CurrencyRupee, "Copy ${e.value}") { it.copy("Amount", e.value) },
     )
     EntityType.DATE -> listOf(
-        EntityAction(Icons.Rounded.CalendarMonth, "Add ${e.text} to calendar") { ctx ->
-            val start = e.epochMillis ?: return@EntityAction
-            ctx.startSafely(
-                Intent(Intent.ACTION_INSERT)
-                    .setData(CalendarContract.Events.CONTENT_URI)
-                    .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
-                    .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, start + 60 * 60 * 1000)
-                    .putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, !e.hasTime),
-            )
-        },
+        EntityAction(Icons.Rounded.ContentCopy, "Copy ${e.text}") { it.copy("Date", e.text) },
     )
     EntityType.CODE -> listOf(
         EntityAction(Icons.Rounded.Password, "Copy code ${e.value}") { it.copy("Code", e.value) },

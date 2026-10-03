@@ -19,6 +19,8 @@ import com.pdrajan.dotgallery.index.IndexEngine
 import com.pdrajan.dotgallery.index.IndexScheduler
 import com.pdrajan.dotgallery.index.ModelHub
 import com.pdrajan.dotgallery.locked.LockedFolder
+import com.pdrajan.dot.design.CrashLog
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,6 +38,7 @@ class GalleryApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         container = GalleryContainer(this)
         container.scheduler.watchForNewMedia()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -53,7 +56,8 @@ class GalleryApp : Application(), SingletonImageLoader.Factory {
 }
 
 class GalleryContainer(val context: Context) {
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Indexing failures must never take the app down; they're logged and retried later.
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> CrashLog.warn(e) })
     val settings = GallerySettings(context)
     val repo = GalleryRepository(GalleryDatabase(context))
     val media = MediaStoreSource(context)

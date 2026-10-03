@@ -51,7 +51,6 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
                 "PRIMARY KEY(collection_id, shot_id))",
         )
         db.execSQL("CREATE INDEX collection_items_shot ON collection_items(shot_id)")
-        db.execSQL("CREATE TABLE reminders(id INTEGER PRIMARY KEY AUTOINCREMENT, shot_id INTEGER NOT NULL, at INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE recent_searches(query TEXT PRIMARY KEY, at INTEGER NOT NULL)")
     }
 

@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.pdrajan.dot.design.CrashReportDialog
 import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dotgallery.ui.GalleryNavHost
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,7 @@ class MainActivity : FragmentActivity() {
             val theme by container.settings.theme.collectAsStateWithLifecycle()
             DotTheme(theme) {
                 GalleryNavHost(container, external, onExternalHandled = { external.value = null })
+                CrashReportDialog()
             }
         }
     }

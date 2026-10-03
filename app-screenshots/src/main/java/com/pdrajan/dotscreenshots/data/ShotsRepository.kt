@@ -116,11 +116,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
             """.trimIndent(),
             arrayOf(id.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(ShotCollection(c.getLong(0), c.getString(1), c.getInt(2), null)) } }
-        val reminder = db.rawQuery(
-            "SELECT id, shot_id, at FROM reminders WHERE shot_id = ? AND done = 0 ORDER BY at LIMIT 1",
-            arrayOf(id.toString()),
-        ).use { c -> if (c.moveToFirst()) Reminder(c.getLong(0), c.getLong(1), c.getLong(2)) else null }
-        return ShotDetail(row.shot, row.text, decodeEntities(row.entities), row.note, collections, reminder)
+        return ShotDetail(row.shot, row.text, decodeEntities(row.entities), row.note, collections)
     }
 
     private data class DetailRow(val shot: Shot, val text: String, val entities: String?, val note: String)
@@ -296,7 +292,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
         db.delete("shots_fts", "docid = ?", arg)
         db.delete("embeddings", "shot_id = ?", arg)
         db.delete("collection_items", "shot_id = ?", arg)
-        db.delete("reminders", "shot_id = ?", arg)
     }
 
     suspend fun saveAnalysis(id: Long, analysis: ScreenshotAnalysis) = withContext(Dispatchers.IO) {
@@ -416,49 +411,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
         }
         ids.forEach { vectorIndex.remove(it) }
         changed()
-    }
-
-    suspend fun setReminder(shotId: Long, at: Long): Long = withContext(Dispatchers.IO) {
-        db.execSQL("UPDATE reminders SET done = 1 WHERE shot_id = ? AND done = 0", arrayOf<Any>(shotId))
-        db.insert("reminders", null, ContentValues().apply {
-            put("shot_id", shotId)
-            put("at", at)
-        }).also { changed() }
-    }
-
-    suspend fun cancelReminders(shotId: Long): List<Long> = withContext(Dispatchers.IO) {
-        val ids = db.rawQuery("SELECT id FROM reminders WHERE shot_id = ? AND done = 0", arrayOf(shotId.toString())).use { c ->
-            buildList { while (c.moveToNext()) add(c.getLong(0)) }
-        }
-        db.execSQL("UPDATE reminders SET done = 1 WHERE shot_id = ?", arrayOf<Any>(shotId))
-        changed()
-        ids
-    }
-
-    suspend fun reminder(id: Long): Reminder? = withContext(Dispatchers.IO) {
-        db.rawQuery("SELECT id, shot_id, at FROM reminders WHERE id = ? AND done = 0", arrayOf(id.toString())).use { c ->
-            if (c.moveToFirst()) Reminder(c.getLong(0), c.getLong(1), c.getLong(2)) else null
-        }
-    }
-
-    suspend fun markReminderDone(id: Long) = withContext(Dispatchers.IO) {
-        db.execSQL("UPDATE reminders SET done = 1 WHERE id = ?", arrayOf<Any>(id))
-        changed()
-    }
-
-    suspend fun activeReminders(): List<Reminder> = withContext(Dispatchers.IO) {
-        db.rawQuery("SELECT id, shot_id, at FROM reminders WHERE done = 0", null).use { c ->
-            buildList { while (c.moveToNext()) add(Reminder(c.getLong(0), c.getLong(1), c.getLong(2))) }
-        }
-    }
-
-    suspend fun reminderTitle(shotId: Long): Pair<String?, String?> = withContext(Dispatchers.IO) {
-        db.rawQuery("SELECT app, ocr_text, note, uri FROM shots WHERE id = ?", arrayOf(shotId.toString())).use { c ->
-            if (!c.moveToFirst()) return@use null to null
-            val note = c.getString(2)
-            val text = c.getString(1)?.lineSequence()?.map { it.trim() }?.firstOrNull { it.length > 3 }
-            (note ?: text ?: c.getString(0)) to c.getString(3)
-        }
     }
 
     fun databaseSizeBytes(): Long = database.readableDatabase.path?.let { java.io.File(it).length() } ?: 0L

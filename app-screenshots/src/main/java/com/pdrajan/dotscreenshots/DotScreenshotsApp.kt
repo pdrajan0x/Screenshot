@@ -17,7 +17,8 @@ import com.pdrajan.dotscreenshots.data.ShotsRepository
 import com.pdrajan.dotscreenshots.index.IndexEngine
 import com.pdrajan.dotscreenshots.index.IndexScheduler
 import com.pdrajan.dotscreenshots.index.ModelHub
-import com.pdrajan.dotscreenshots.reminders.ReminderScheduler
+import com.pdrajan.dot.design.CrashLog
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,8 +36,8 @@ class DotScreenshotsApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         container = AppContainer(this)
-        ReminderScheduler.createChannel(this)
         container.scheduler.watchForNewScreenshots()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = container.onForeground()
@@ -53,7 +54,8 @@ class DotScreenshotsApp : Application(), SingletonImageLoader.Factory {
 
 /** Manual dependency container — the app is small enough not to need a DI framework. */
 class AppContainer(val context: Context) {
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Indexing failures must never take the app down; they're logged and retried later.
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> CrashLog.warn(e) })
     val settings = Settings(context)
     val repo = ShotsRepository(ShotsDatabase(context))
     val media = MediaStoreSource(context)

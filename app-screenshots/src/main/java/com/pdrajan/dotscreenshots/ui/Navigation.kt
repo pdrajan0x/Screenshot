@@ -4,7 +4,6 @@ import android.net.Uri
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
@@ -19,7 +18,6 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.DotScreenshotsApp
-import kotlinx.coroutines.flow.StateFlow
 
 /** Where the viewer's swipe list comes from. */
 object ShotContext {
@@ -41,20 +39,11 @@ inline fun <reified VM : ViewModel> containerViewModel(key: String? = null, cros
 }
 
 @Composable
-fun DotScreenshotsNavHost(container: AppContainer, openShot: StateFlow<Long?>, onShotOpened: () -> Unit) {
+fun DotScreenshotsNavHost(container: AppContainer) {
     val nav = rememberNavController()
     val onboarded by container.settings.onboardingDone.collectAsStateWithLifecycle()
-    val pendingShot by openShot.collectAsStateWithLifecycle()
 
     fun openDetail(id: Long, ctx: String) = nav.navigate("detail/$id?ctx=${Uri.encode(ctx)}")
-
-    LaunchedEffect(pendingShot, onboarded) {
-        val id = pendingShot
-        if (id != null && onboarded) {
-            openDetail(id, ShotContext.SINGLE)
-            onShotOpened()
-        }
-    }
 
     NavHost(
         navController = nav,

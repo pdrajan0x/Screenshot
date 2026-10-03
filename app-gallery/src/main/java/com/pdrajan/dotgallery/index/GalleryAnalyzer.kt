@@ -41,7 +41,7 @@ class GalleryAnalyzer(
                 ocrText = if (wantsText) runCatching { reader!!.read(bitmap) }.getOrDefault("") else "",
                 dHash = dHash(bitmap),
                 sharpness = if (item.isVideo) null else sharpness(bitmap),
-                faces = if (!item.isVideo && faces != null) runCatching { faces.analyze(bitmap, item.id, thumbDir) }.getOrDefault(emptyList()) else emptyList(),
+                faces = faces?.takeIf { !item.isVideo }?.let { engine -> runCatching { engine.analyze(bitmap, item.id, thumbDir) }.getOrDefault(emptyList()) }.orEmpty(),
             )
         } finally {
             bitmap.recycle()

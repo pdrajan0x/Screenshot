@@ -1,19 +1,14 @@
 package com.pdrajan.dotscreenshots.ui
 
-import android.Manifest
 import android.content.ContentUris
-import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,8 +36,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Alarm
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -52,9 +45,6 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Wallpaper
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,14 +58,11 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimePicker
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -96,12 +83,10 @@ import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.media.MediaActions
-import com.pdrajan.dot.media.MediaPermissions
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.IndexState
 import com.pdrajan.dotscreenshots.data.Shot
 import com.pdrajan.dotscreenshots.data.ShotDetail
-import com.pdrajan.dotscreenshots.reminders.ReminderScheduler
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -115,13 +100,6 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
-import java.time.Instant
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.LocalTime
-import java.time.ZoneId
-import java.time.ZoneOffset
-import java.time.temporal.TemporalAdjusters
 
 private fun shotUri(id: Long): Uri =
     ContentUris.withAppendedId(
@@ -169,18 +147,6 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
     }
 
     fun removeFrom(collectionId: Long) = viewModelScope.launch { c.repo.removeFromCollection(collectionId, listOf(current.value)) }
-
-    fun setReminder(context: Context, at: Long) = viewModelScope.launch {
-        val shotId = current.value
-        c.repo.cancelReminders(shotId).forEach { ReminderScheduler.cancel(context, it, shotId) }
-        val reminderId = c.repo.setReminder(shotId, at)
-        ReminderScheduler.schedule(context, reminderId, shotId, at)
-    }
-
-    fun cancelReminder(context: Context) = viewModelScope.launch {
-        val shotId = current.value
-        c.repo.cancelReminders(shotId).forEach { ReminderScheduler.cancel(context, it, shotId) }
-    }
 
     fun forget(id: Long) = viewModelScope.launch { c.repo.forget(listOf(id)) }
 }
@@ -350,23 +316,6 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
     val similar by vm.similar.collectAsStateWithLifecycle()
     var note by remember(d.shot.id) { mutableStateOf(d.note) }
     var picker by remember { mutableStateOf(false) }
-    var pickDate by remember { mutableStateOf(false) }
-    var pickTimeFor by remember { mutableStateOf<LocalDate?>(null) }
-    var pendingReminder by remember { mutableStateOf<Long?>(null) }
-
-    val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        pendingReminder?.let { vm.setReminder(ctx, it) }
-        pendingReminder = null
-    }
-
-    fun remind(at: Long) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !MediaPermissions.notificationsGranted(ctx)) {
-            pendingReminder = at
-            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            vm.setReminder(ctx, at)
-        }
-    }
 
     LaunchedEffect(note) {
         if (note == d.note) return@LaunchedEffect
@@ -413,21 +362,6 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 d.collections.forEach { c -> DotChip(c.name, onClick = { onOpenCollection(c.id) }, selected = true) }
                 DotChip("Add", onClick = { picker = true }, icon = Icons.Rounded.Add)
-            }
-        }
-
-        SheetSection("Reminder") {
-            val r = d.reminder
-            if (r != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconLabel(Icons.Rounded.Alarm, DateLabels.dateTime(r.at), Modifier.weight(1f))
-                    IconButton(onClick = { vm.cancelReminder(ctx) }) { Icon(Icons.Rounded.Close, "Cancel reminder") }
-                }
-            } else {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    reminderPresets().forEach { (label, at) -> DotChip(label, onClick = { remind(at) }, icon = Icons.Rounded.Alarm) }
-                    DotChip("Pick…", onClick = { pickDate = true })
-                }
             }
         }
 
@@ -488,51 +422,6 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
             onCreate = { vm.createCollection(it); picker = false },
         )
     }
-
-    if (pickDate) {
-        val state = rememberDatePickerState(initialSelectedDateMillis = System.currentTimeMillis())
-        DatePickerDialog(
-            onDismissRequest = { pickDate = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    pickDate = false
-                    state.selectedDateMillis?.let { pickTimeFor = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }
-                }) { Text("Next") }
-            },
-            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("Cancel") } },
-        ) { DatePicker(state = state) }
-    }
-
-    pickTimeFor?.let { date ->
-        val state = rememberTimePickerState(initialHour = 9, initialMinute = 0)
-        AlertDialog(
-            onDismissRequest = { pickTimeFor = null },
-            title = { Text("Remind me at") },
-            text = { TimePicker(state = state) },
-            confirmButton = {
-                TextButton(onClick = {
-                    val at = LocalDateTime.of(date, LocalTime.of(state.hour, state.minute)).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                    pickTimeFor = null
-                    remind(at)
-                }) { Text("Set reminder") }
-            },
-            dismissButton = { TextButton(onClick = { pickTimeFor = null }) { Text("Cancel") } },
-        )
-    }
-}
-
-private fun reminderPresets(): List<Pair<String, Long>> {
-    val zone = ZoneId.systemDefault()
-    val now = LocalDateTime.now(zone)
-    fun at(dt: LocalDateTime) = dt.atZone(zone).toInstant().toEpochMilli()
-    val list = ArrayList<Pair<String, Long>>()
-    val tonight = now.toLocalDate().atTime(20, 0)
-    if (now.isBefore(tonight.minusMinutes(30))) list += "Tonight 8 PM" to at(tonight)
-    list += "Tomorrow 9 AM" to at(now.toLocalDate().plusDays(1).atTime(9, 0))
-    val saturday = now.toLocalDate().with(TemporalAdjusters.next(java.time.DayOfWeek.SATURDAY)).atTime(10, 0)
-    list += "Saturday 10 AM" to at(saturday)
-    list += "Next week" to at(now.toLocalDate().plusWeeks(1).atTime(9, 0))
-    return list
 }
 
 private fun formatBytes(bytes: Long): String = when {
