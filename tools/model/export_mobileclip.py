@@ -44,14 +44,19 @@ def reparameterize(model):
     return reparameterize_model(model)
 
 
+def l2_normalize(f):
+    # Written with ReduceSum rather than torch.norm (ReduceL2): the quantiser upgrades the opset,
+    # and an opset-17 ReduceL2's `axes` attribute is invalid in newer opsets.
+    return f / torch.sqrt((f * f).sum(dim=-1, keepdim=True))
+
+
 class ImageEncoder(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
 
     def forward(self, pixel_values):
-        f = self.model.encode_image(pixel_values)
-        return f / f.norm(dim=-1, keepdim=True)
+        return l2_normalize(self.model.encode_image(pixel_values))
 
 
 class TextEncoder(torch.nn.Module):
@@ -60,8 +65,7 @@ class TextEncoder(torch.nn.Module):
         self.model = model
 
     def forward(self, input_ids):
-        f = self.model.encode_text(input_ids)
-        return f / f.norm(dim=-1, keepdim=True)
+        return l2_normalize(self.model.encode_text(input_ids))
 
 
 def synthetic_image(size):
@@ -216,7 +220,7 @@ def main():
             continue
         size = os.path.getsize(path)
         print(f"text {name}: min cos={c:.5f} size={size / 1e6:.1f} MB")
-        if c >= 0.99:
+        if c >= 0.995:
             text_candidates.append((size, name, path))
     if not text_candidates:
         try:
@@ -225,7 +229,7 @@ def main():
             onnx.save(convert_float_to_float16(onnx.load(text_fp32), keep_io_types=True), path)
             c = text_cos(path, text_level)
             print(f"text fp16: min cos={c:.5f} size={os.path.getsize(path) / 1e6:.1f} MB")
-            if c >= 0.99:
+            if c >= 0.995:
                 text_candidates.append((os.path.getsize(path), "fp16", path))
         except Exception as e:  # noqa: BLE001
             print(f"text fp16: failed: {e}"[:300])

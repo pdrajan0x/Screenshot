@@ -44,9 +44,39 @@ jobs:
           path: model-out
           retention-days: 3
 
+  faces:
+    name: Fetch face model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore face model
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: model-out-faces
+          key: faces-${{ hashFiles('tools/model/export_faces.py') }}
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download and verify
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          pip install onnx onnxruntime numpy
+          python tools/model/export_faces.py --out model-out-faces
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faces-model
+          path: model-out-faces
+          retention-days: 3
+
   android:
     name: Build APKs
-    needs: model
+    needs: [model, faces]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +85,11 @@ jobs:
         with:
           name: clip-model
           path: model-out
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: faces-model
+          path: model-out-faces
 
       - uses: actions/setup-java@v4
         with:
@@ -105,7 +140,9 @@ jobs:
         run: ./gradlew :core:engine:test --stacktrace
 
       - name: Build Dot Screenshots
-        run: ./gradlew :app-screenshots:assembleRelease --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :app-screenshots:assembleRelease --console=plain 2>&1 | tee -a build.log
 
       - name: Collect APKs
         run: |
@@ -118,6 +155,12 @@ jobs:
           name: apks
           path: dist
           retention-days: 14
+
+      - name: Show compiler errors
+        if: failure()
+        run: |
+          echo "==================== BUILD ERRORS ===================="
+          grep -E "^e: |^w: .*(error|unresolved)|error:|What went wrong|Could not resolve|> Could not|FAILED" -A2 build.log | grep -v "^--$" | head -200 || true
 
       - name: Upload test reports
         if: failure()

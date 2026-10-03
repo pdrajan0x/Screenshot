@@ -332,14 +332,14 @@ class ShotsRepository(private val database: ShotsDatabase) {
     suspend fun markFailed(id: Long) = withContext(Dispatchers.IO) {
         db.execSQL(
             "UPDATE shots SET attempts = attempts + 1, state = CASE WHEN attempts + 1 >= 3 THEN ? ELSE ? END WHERE id = ?",
-            arrayOf(IndexState.FAILED.code, IndexState.PENDING.code, id),
+            arrayOf<Any>(IndexState.FAILED.code, IndexState.PENDING.code, id),
         )
         changed()
     }
 
     /** Re-analyse everything (e.g. after switching OCR language). Notes and collections are kept. */
     suspend fun requeueAll() = withContext(Dispatchers.IO) {
-        db.execSQL("UPDATE shots SET state = ?, attempts = 0", arrayOf(IndexState.PENDING.code))
+        db.execSQL("UPDATE shots SET state = ?, attempts = 0", arrayOf<Any>(IndexState.PENDING.code))
         changed()
     }
 
@@ -347,7 +347,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
         db.delete("shots_fts", "docid = ?", arrayOf(id.toString()))
         db.execSQL(
             "INSERT INTO shots_fts(docid, ocr_text, note, app) SELECT id, COALESCE(ocr_text,''), COALESCE(note,''), COALESCE(app,'') FROM shots WHERE id = ?",
-            arrayOf(id),
+            arrayOf<Any>(id),
         )
     }
 
@@ -360,7 +360,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
     }
 
     suspend fun toggleFavorite(id: Long) = withContext(Dispatchers.IO) {
-        db.execSQL("UPDATE shots SET favorite = 1 - favorite WHERE id = ?", arrayOf(id))
+        db.execSQL("UPDATE shots SET favorite = 1 - favorite WHERE id = ?", arrayOf<Any>(id))
         changed()
     }
 
@@ -419,7 +419,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
     }
 
     suspend fun setReminder(shotId: Long, at: Long): Long = withContext(Dispatchers.IO) {
-        db.execSQL("UPDATE reminders SET done = 1 WHERE shot_id = ? AND done = 0", arrayOf(shotId))
+        db.execSQL("UPDATE reminders SET done = 1 WHERE shot_id = ? AND done = 0", arrayOf<Any>(shotId))
         db.insert("reminders", null, ContentValues().apply {
             put("shot_id", shotId)
             put("at", at)
@@ -430,7 +430,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val ids = db.rawQuery("SELECT id FROM reminders WHERE shot_id = ? AND done = 0", arrayOf(shotId.toString())).use { c ->
             buildList { while (c.moveToNext()) add(c.getLong(0)) }
         }
-        db.execSQL("UPDATE reminders SET done = 1 WHERE shot_id = ?", arrayOf(shotId))
+        db.execSQL("UPDATE reminders SET done = 1 WHERE shot_id = ?", arrayOf<Any>(shotId))
         changed()
         ids
     }
@@ -442,7 +442,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
     }
 
     suspend fun markReminderDone(id: Long) = withContext(Dispatchers.IO) {
-        db.execSQL("UPDATE reminders SET done = 1 WHERE id = ?", arrayOf(id))
+        db.execSQL("UPDATE reminders SET done = 1 WHERE id = ?", arrayOf<Any>(id))
         changed()
     }
 
