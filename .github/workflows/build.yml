@@ -154,7 +154,31 @@ jobs:
           mkdir -p dist
           cp app-screenshots/build/outputs/apk/release/*.apk dist/DotScreenshots.apk
           cp app-gallery/build/outputs/apk/release/*.apk dist/DotGallery.apk
+          # R8 mappings, to turn obfuscated stack traces from the phone back into real names.
+          cp app-screenshots/build/outputs/mapping/release/mapping.txt dist/DotScreenshots-mapping.txt
+          cp app-gallery/build/outputs/mapping/release/mapping.txt dist/DotGallery-mapping.txt
           ls -la dist
+
+      - name: Check ML Kit survived R8
+        run: |
+          pip install --quiet androguard
+          python3 - <<'PY'
+          import re, sys
+          from loguru import logger
+          logger.remove()
+          from androguard.misc import AnalyzeAPK
+          ok = True
+          for apk in ["dist/DotScreenshots.apk", "dist/DotGallery.apk"]:
+              a, dexes, _ = AnalyzeAPK(apk)
+              manifest = a.get_android_manifest_axml().get_xml().decode()
+              classes = {c.name: c for d in dexes for c in d.get_classes()}
+              for reg in re.findall(r"com\.google\.firebase\.components:([\w.]+)", manifest):
+                  c = classes.get("L" + reg.replace(".", "/") + ";")
+                  has_init = c is not None and any(m.name == "<init>" and m.get_descriptor() == "()V" for m in c.get_methods())
+                  print(apk, reg, "OK" if has_init else "MISSING no-arg constructor")
+                  ok &= has_init
+          sys.exit(0 if ok else 1)
+          PY
 
       - uses: actions/upload-artifact@v4
         with:
@@ -183,7 +207,7 @@ jobs:
         run: |
           tag="latest-${GITHUB_REF_NAME//\//-}"
           gh release delete "$tag" --yes --cleanup-tag || true
-          gh release create "$tag" dist/*.apk \
+          gh release create "$tag" dist/*.apk dist/*-mapping.txt \
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "Dot apps — latest build (${GITHUB_REF_NAME})" \

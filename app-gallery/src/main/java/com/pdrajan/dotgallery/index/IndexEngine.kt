@@ -121,8 +121,15 @@ class IndexEngine(
             } else {
                 null
             }
-            val reader = if (settings.readText.value) TextReader(hindi = settings.readHindi.value) else null
-            val analyzer = GalleryAnalyzer(context, clip, tagger, faces, reader)
+            val readText = settings.readText.value
+            val reader = if (readText) {
+                runCatching { TextReader(hindi = settings.readHindi.value) }
+                    .onFailure { DotLog.e("process: text recognizer unavailable; indexing without text for now", it) }
+                    .getOrNull()
+            } else {
+                null
+            }
+            val analyzer = GalleryAnalyzer(context, clip, tagger, faces, reader, readText)
             _progress.value = IndexProgress(running = true, total = pending.size)
             try {
                 for (item in pending) {

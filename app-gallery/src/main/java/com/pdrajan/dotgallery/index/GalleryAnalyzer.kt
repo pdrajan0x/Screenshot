@@ -25,6 +25,8 @@ class GalleryAnalyzer(
     private val tagger: PhotoTagger,
     private val faces: FaceEngine?,
     private val reader: TextReader?,
+    /** Text reading is on; with no [reader] (ML Kit unavailable) items are flagged to read later. */
+    private val readText: Boolean = reader != null,
 ) {
     private val thumbDir = File(context.filesDir, "faces")
 
@@ -34,10 +36,16 @@ class GalleryAnalyzer(
             val crops = clip.embedImage(bitmap, maxCrops = 2)
             val tags = tagger.tags(crops)
             val isScreenshot = item.path?.contains("Screenshot", ignoreCase = true) == true
-            val wantsText = !item.isVideo && reader != null && (isScreenshot || tags.any { it in PhotoTags.TEXT_HEAVY })
+            val wantsText = !item.isVideo && readText && (isScreenshot || tags.any { it in PhotoTags.TEXT_HEAVY })
             var ocrPending = false
-            val text = if (!wantsText) "" else try {
-                reader!!.read(bitmap)
+            val textReader = reader
+            val text = if (!wantsText) {
+                ""
+            } else if (textReader == null) {
+                ocrPending = true
+                ""
+            } else try {
+                textReader.read(bitmap)
             } catch (e: Exception) {
                 ocrPending = TextReader.isModelUnavailable(e)
                 ""

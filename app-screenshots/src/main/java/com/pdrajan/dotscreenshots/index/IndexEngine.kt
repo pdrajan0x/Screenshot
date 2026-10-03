@@ -66,11 +66,13 @@ class IndexEngine(
             val batchStart = System.currentTimeMillis()
             var reader: TextReader? = null
             try {
-                val textReader = TextReader(hindi = settings.readHindi.value)
+                val textReader = runCatching { TextReader(hindi = settings.readHindi.value) }
+                    .onFailure { DotLog.e("process: text recognizer unavailable; indexing without text for now", it) }
+                    .getOrNull()
                 reader = textReader
                 // Screenshots indexed while the text model was downloading get read again once it's ready.
                 val waitingForText = repo.ocrPendingCount()
-                if (waitingForText > 0) {
+                if (waitingForText > 0 && textReader != null) {
                     if (withContext(Dispatchers.Default) { textReader.isModelReady() }) {
                         DotLog.i("process: text model ready; re-reading ${repo.requeueOcrPending()} screenshots")
                     } else {

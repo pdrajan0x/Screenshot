@@ -24,7 +24,8 @@ data class ScreenshotAnalysis(
 class ScreenshotAnalyzer(
     private val context: Context,
     private val clip: ClipModel,
-    private val reader: TextReader,
+    /** Null when ML Kit couldn't be set up; screenshots are then indexed without text, to be read later. */
+    private val reader: TextReader?,
     private val classifier: CategoryClassifier,
     private val extractor: EntityExtractor = EntityExtractor(),
 ) {
@@ -34,8 +35,14 @@ class ScreenshotAnalyzer(
         val bitmap = BitmapLoader.load(context.contentResolver, uri)
         try {
             var ocrPending = false
-            val text = if (!runOcr) "" else try {
-                reader.read(bitmap)
+            val textReader = reader
+            val text = if (!runOcr) {
+                ""
+            } else if (textReader == null) {
+                ocrPending = true
+                ""
+            } else try {
+                textReader.read(bitmap)
             } catch (e: Exception) {
                 if (!TextReader.isModelUnavailable(e)) throw e
                 ocrPending = true
