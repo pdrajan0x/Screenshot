@@ -1,0 +1,57 @@
+name: Mirror vision models
+
+# Copies small on-device vision-language models (photo descriptions in Dot Gallery) from Hugging
+# Face into a GitHub release with SHA-256 and sizes: a second download source for the app, and
+# files that can be benchmarked elsewhere.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/vlm-models.yml
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download models
+        run: |
+          set -euo pipefail
+          mkdir -p models && cd models
+          # repo  file-pattern (first match wins, in order)
+          fetch() {
+            local repo="$1"; shift
+            local files
+            files=$(curl -fsSL "https://huggingface.co/api/models/$repo" | python3 -c "import sys,json; print('\n'.join(s['rfilename'] for s in json.load(sys.stdin)['siblings']))")
+            echo "== $repo"; echo "$files"
+            for pattern in "$@"; do
+              local name
+              name=$(echo "$files" | grep -iE "$pattern" | head -1 || true)
+              if [ -n "$name" ]; then
+                echo "-> $name"
+                curl -fL --retry 4 -o "$(basename "$name")" "https://huggingface.co/$repo/resolve/main/$name"
+                return 0
+              fi
+            done
+            echo "no file matched in $repo: $*"; return 1
+          }
+          fetch ggml-org/SmolVLM-500M-Instruct-GGUF '^SmolVLM-500M-Instruct-Q8_0\.gguf$'
+          fetch ggml-org/SmolVLM-500M-Instruct-GGUF '^mmproj-SmolVLM-500M-Instruct-Q8_0\.gguf$' '^mmproj.*f16\.gguf$'
+          fetch LiquidAI/LFM2.5-VL-450M-GGUF '^LFM2\.5-VL-450M-Q4_0\.gguf$' 'Q4_0\.gguf$' 'Q8_0\.gguf$'
+          fetch LiquidAI/LFM2.5-VL-450M-GGUF '^mmproj.*Q8_0\.gguf$' '^mmproj.*F16\.gguf$' '^mmproj.*\.gguf$'
+          ls -l
+          sha256sum *.gguf | tee SHA256SUMS.txt
+          stat -c '%n %s' *.gguf | tee SIZES.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="vlm-models-v1"
+          gh release delete "$tag" --yes --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create "$tag" models/*.gguf models/SHA256SUMS.txt models/SIZES.txt \
+            -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+            --title "On-device vision models (mirror)" \
+            --notes "$(cat models/SHA256SUMS.txt; echo; cat models/SIZES.txt)"
