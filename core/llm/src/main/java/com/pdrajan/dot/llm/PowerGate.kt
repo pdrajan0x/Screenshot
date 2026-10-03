@@ -1,15 +1,14 @@
-package com.pdrajan.dotscreenshots.index
+package com.pdrajan.dot.llm
 
 import android.content.Context
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
-import com.pdrajan.dot.llm.LlamaEngine
 
 /**
- * When the summary model may run without costing much battery or heating the phone. Each summary
- * is several seconds of full CPU, so on battery it only runs when the phone is cool, battery saver
- * is off and there's charge to spare; the backlog waits for the charger.
+ * When an on-device model may run without costing much battery or heating the phone. Each summary
+ * or photo description is seconds of full CPU, so on battery it only runs when the phone is cool,
+ * battery saver is off and there's charge to spare; background work waits for the charger.
  */
 class PowerGate(context: Context) {
     private val battery = context.getSystemService(BatteryManager::class.java)
@@ -28,7 +27,7 @@ class PowerGate(context: Context) {
      * Why summaries can't run right now, or null when they can. [userAsked] ("Process now") skips
      * the battery checks, but nothing runs on a hot phone.
      */
-    fun summaryBlocker(userAsked: Boolean = false): String? {
+    fun blocker(userAsked: Boolean = false): String? {
         val t = thermal
         if (t >= PowerManager.THERMAL_STATUS_SEVERE) return "phone is hot"
         if (isCharging || userAsked) return null

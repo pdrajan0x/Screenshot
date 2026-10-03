@@ -31,6 +31,8 @@ data class MediaDetail(
     val text: String,
     val albums: List<AlbumSummary>,
     val people: List<PersonSummary>,
+    /** One-sentence description from the on-device vision model, once written. */
+    val caption: String? = null,
 )
 
 /** A device folder (MediaStore bucket). */

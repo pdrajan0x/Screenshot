@@ -20,6 +20,10 @@ object LlamaNative {
         temperature: Float,
         seed: Int,
     ): ByteArray?
+    /** Loads a vision projector (mmproj) for the loaded model; [maxImageTokens] > 0 caps tokens per image. */
+    @JvmStatic external fun nativeLoadVision(handle: Long, mmprojPath: String, nThreads: Int, maxImageTokens: Int): Boolean
+    /** Answers [instruction] about an RGB image (3 bytes per pixel, row by row). */
+    @JvmStatic external fun nativeDescribe(handle: Long, rgb: ByteArray, width: Int, height: Int, instruction: ByteArray, maxTokens: Int): ByteArray?
     @JvmStatic external fun nativeLastError(handle: Long): String
     @JvmStatic external fun nativeCancel(handle: Long)
     @JvmStatic external fun nativeFree(handle: Long)
@@ -46,12 +50,27 @@ class LlamaEngine private constructor(handle: Long) : Closeable {
             String(out, Charsets.UTF_8)
         }
 
+    /** Lets [describe] see images: loads a vision model's projector file. */
+    fun loadVision(mmproj: File, threads: Int = defaultThreads(), maxImageTokens: Int = 0): Boolean = synchronized(lock) {
+        val h = handle
+        h != 0L && LlamaNative.nativeLoadVision(h, mmproj.absolutePath, threads, maxImageTokens)
+    }
+
+    /** Blocking; run off the main thread. Answers [instruction] about an RGB image ([width] x [height]). */
+    fun describe(rgb: ByteArray, width: Int, height: Int, instruction: String, maxTokens: Int = 60): String = synchronized(lock) {
+        val h = handle
+        if (h == 0L) throw LlmException("model closed")
+        val out = LlamaNative.nativeDescribe(h, rgb, width, height, instruction.toByteArray(), maxTokens)
+            ?: throw LlmException(LlamaNative.nativeLastError(h))
+        String(out, Charsets.UTF_8)
+    }
+
     fun countTokens(text: String): Int = synchronized(lock) {
         val h = handle
         if (h == 0L) 0 else LlamaNative.nativeCountTokens(h, text.toByteArray())
     }
 
-    /** Stops a running [generate] early (it then throws). Safe from any thread. */
+    /** Stops a running [generate] or [describe] early (it then throws). Safe from any thread. */
     fun cancel() {
         val h = handle
         if (h != 0L) LlamaNative.nativeCancel(h)

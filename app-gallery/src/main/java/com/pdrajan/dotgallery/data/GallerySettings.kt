@@ -30,6 +30,10 @@ class GallerySettings(context: Context) {
     private val _onboarded = bool("onboarded", false)
     val onboarded: StateFlow<Boolean> = _onboarded.asStateFlow()
 
+    private val _captions = bool("captions", true)
+    /** Photo descriptions (when the model is downloaded). */
+    val captionsEnabled: StateFlow<Boolean> = _captions.asStateFlow()
+
     private val _columns = MutableStateFlow(prefs.getInt("columns", 4))
     val columns: StateFlow<Int> = _columns.asStateFlow()
 
@@ -40,4 +44,5 @@ class GallerySettings(context: Context) {
     fun setBacklogWhileCharging(v: Boolean) { prefs.edit { putBoolean("backlog_charging", v) }; _charging.value = v }
     fun setOnboarded() { prefs.edit { putBoolean("onboarded", true) }; _onboarded.value = true }
     fun setColumns(n: Int) { prefs.edit { putInt("columns", n) }; _columns.value = n }
+    fun setCaptionsEnabled(v: Boolean) { prefs.edit { putBoolean("captions", v) }; _captions.value = v }
 }

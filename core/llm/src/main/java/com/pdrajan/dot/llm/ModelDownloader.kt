@@ -51,6 +51,37 @@ object Models {
         ),
         thinking = true,
     )
+
+    /**
+     * LFM2.5-VL 450M (Liquid AI), the language half of the photo describer: small and fast enough to
+     * describe a photo in a couple of seconds on a phone CPU.
+     */
+    val PHOTO_TEXT = ModelSpec(
+        id = "lfm2.5-vl-450m-q4_0",
+        label = "LFM2.5-VL 450M",
+        fileName = "LFM2.5-VL-450M-Q4_0.gguf",
+        sizeBytes = 219_311_264L,
+        sha256 = "6d2757dd0f0b98aea7dc90477bb5b3a0df1089be85ef92943f8cecb05121ccbf",
+        urls = listOf(
+            "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/LFM2.5-VL-450M-Q4_0.gguf",
+            "https://github.com/pdrajan0x/Screenshot/releases/download/vlm-models-v1/LFM2.5-VL-450M-Q4_0.gguf",
+        ),
+        thinking = false,
+    )
+
+    /** Its vision encoder and projector (mmproj): turns a photo into tokens for [PHOTO_TEXT]. */
+    val PHOTO_VISION = ModelSpec(
+        id = "lfm2.5-vl-450m-mmproj-q8_0",
+        label = "LFM2.5-VL 450M vision",
+        fileName = "mmproj-LFM2.5-VL-450m-Q8_0.gguf",
+        sizeBytes = 102_815_168L,
+        sha256 = "ebfc428baa37efad8bae93864f914b2634a09009f91ad59f974fe1a1565d8561",
+        urls = listOf(
+            "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-LFM2.5-VL-450m-Q8_0.gguf",
+            "https://github.com/pdrajan0x/Screenshot/releases/download/vlm-models-v1/mmproj-LFM2.5-VL-450m-Q8_0.gguf",
+        ),
+        thinking = false,
+    )
 }
 
 /** Where a ready model lives. */

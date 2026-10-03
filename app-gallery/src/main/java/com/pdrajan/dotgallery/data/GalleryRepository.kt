@@ -137,8 +137,10 @@ class GalleryRepository(private val database: GalleryDatabase) {
     fun observeDetail(id: Long): Flow<MediaDetail?> = observe { detail(id) }
 
     private fun detail(id: Long): MediaDetail? {
-        val (media, path, text) = db.rawQuery("SELECT $MEDIA_COLS, m.path, m.ocr_text FROM media m WHERE m.id = ?", arrayOf(id.toString())).use { c ->
+        var caption: String? = null
+        val (media, path, text) = db.rawQuery("SELECT $MEDIA_COLS, m.path, m.ocr_text, m.caption FROM media m WHERE m.id = ?", arrayOf(id.toString())).use { c ->
             if (!c.moveToFirst()) return null
+            caption = c.getString(MEDIA_COL_COUNT + 2)
             Triple(c.media(), c.getString(MEDIA_COL_COUNT), c.getString(MEDIA_COL_COUNT + 1) ?: "")
         }
         val albums = db.rawQuery(
@@ -149,7 +151,7 @@ class GalleryRepository(private val database: GalleryDatabase) {
             "SELECT DISTINCT p.id, p.name, (SELECT thumb FROM faces WHERE id = p.cover_face), p.hidden FROM people p JOIN faces f ON f.person_id = p.id WHERE f.media_id = ?",
             arrayOf(id.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(PersonSummary(c.getLong(0), c.getString(1), 0, c.getString(2), c.getInt(3) == 1)) } }
-        return MediaDetail(media, path, text, albums, people)
+        return MediaDetail(media, path, text, albums, people, caption)
     }
 
     fun observeCounts(): Flow<IndexCounts> = observe { counts() }
@@ -293,7 +295,7 @@ class GalleryRepository(private val database: GalleryDatabase) {
                     put("favorite", if (item.isFavorite) 1 else 0)
                 }, SQLiteDatabase.CONFLICT_IGNORE)
                 db.execSQL(
-                    "INSERT INTO media_fts(docid, name, ocr_text, tags) VALUES(?, ?, '', '')",
+                    "INSERT INTO media_fts(docid, ${GalleryDatabase.FTS_COLUMNS}) VALUES(?, ?, '', '', '')",
                     arrayOf<Any>(item.id, item.displayName),
                 )
                 added++
@@ -330,11 +332,7 @@ class GalleryRepository(private val database: GalleryDatabase) {
                 put("index_version", GalleryDatabase.INDEX_VERSION)
                 put("ocr_pending", if (a.ocrPending) 1 else 0)
             }, "id = ?", arrayOf(id.toString()))
-            db.delete("media_fts", "docid = ?", arrayOf(id.toString()))
-            db.execSQL(
-                "INSERT INTO media_fts(docid, name, ocr_text, tags) SELECT id, name, COALESCE(ocr_text, ''), tags FROM media WHERE id = ?",
-                arrayOf<Any>(id),
-            )
+            rewriteFts(id)
             db.delete("embeddings", "media_id = ?", arrayOf(id.toString()))
             crops.forEachIndexed { i, q ->
                 db.insert("embeddings", null, ContentValues().apply {
@@ -392,6 +390,53 @@ class GalleryRepository(private val database: GalleryDatabase) {
     }
 
     /** Photos indexed while the text model was still downloading. */
+    private fun rewriteFts(id: Long) {
+        db.delete("media_fts", "docid = ?", arrayOf(id.toString()))
+        db.execSQL(
+            "INSERT INTO media_fts(docid, ${GalleryDatabase.FTS_COLUMNS}) SELECT id, ${GalleryDatabase.FTS_SOURCE} FROM media WHERE id = ?",
+            arrayOf<Any>(id),
+        )
+    }
+
+    // ---------------------------------------------------------------- photo descriptions
+
+    data class CaptionJob(val id: Long, val uri: android.net.Uri, val name: String)
+
+    /** Analysed photos (not videos) still waiting for a description, newest first; [since] limits to recent ones. */
+    suspend fun captionQueue(limit: Int, since: Long = 0L): List<CaptionJob> = withContext(Dispatchers.IO) {
+        db.rawQuery(
+            "SELECT id, uri, name FROM media WHERE type = 0 AND state = ? AND caption_state = ? AND taken_at >= ? " +
+                "ORDER BY taken_at DESC LIMIT ?",
+            arrayOf(STATE_INDEXED.toString(), CAPTION_PENDING.toString(), since.toString(), limit.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(CaptionJob(c.getLong(0), c.getString(1).toUri(), c.getString(2))) } }
+    }
+
+    suspend fun saveCaption(id: Long, caption: String) = withContext(Dispatchers.IO) {
+        db.beginTransaction()
+        try {
+            db.execSQL("UPDATE media SET caption = ?, caption_state = ? WHERE id = ?", arrayOf<Any>(caption, CAPTION_DONE, id))
+            rewriteFts(id)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        changed()
+    }
+
+    suspend fun markCaptionFailed(id: Long) = withContext(Dispatchers.IO) {
+        db.execSQL("UPDATE media SET caption_state = ? WHERE id = ?", arrayOf<Any>(CAPTION_FAILED, id))
+        changed()
+    }
+
+    /** Described photos, and photos still waiting. */
+    fun captionCounts(): Pair<Int, Int> =
+        db.rawQuery(
+            "SELECT SUM(caption_state = ?), SUM(caption_state = ?) FROM media WHERE type = 0 AND state = ?",
+            arrayOf(CAPTION_DONE.toString(), CAPTION_PENDING.toString(), STATE_INDEXED.toString()),
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) to c.getInt(1) else 0 to 0 }
+
+    fun observeCaptionCounts(): Flow<Pair<Int, Int>> = observe { captionCounts() }
+
     fun ocrPendingCount(): Int =
         db.rawQuery("SELECT COUNT(*) FROM media WHERE ocr_pending = 1", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
@@ -592,6 +637,9 @@ class GalleryRepository(private val database: GalleryDatabase) {
         const val STATE_PENDING = 0
         const val STATE_INDEXED = 1
         const val STATE_FAILED = 2
+        const val CAPTION_PENDING = 0
+        const val CAPTION_DONE = 1
+        const val CAPTION_FAILED = 2
         private const val MEDIA_COLS =
             "m.id, m.uri, m.type, m.name, m.mime, m.taken_at, m.width, m.height, m.size, m.duration, m.bucket_id, m.bucket, m.favorite, m.archived, m.tags"
         private const val MEDIA_COL_COUNT = 15

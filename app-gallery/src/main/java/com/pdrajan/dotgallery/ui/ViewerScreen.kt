@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -71,6 +72,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -202,10 +204,23 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
         }
 
         AnimatedVisibility(chrome, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
-            Row(
+            Column(
                 Modifier.fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
-                    .navigationBarsPadding().padding(vertical = 6.dp),
+                    .navigationBarsPadding(),
+            ) {
+            detail?.caption?.let { caption ->
+                Text(
+                    caption,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().clickable { info = true }.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 val m = detail?.media
@@ -231,6 +246,7 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
                         }
                     }
                 }, tint = Color.White)
+            }
             }
         }
     }
@@ -298,6 +314,10 @@ private fun InfoSheet(d: MediaDetail, onPerson: (Long) -> Unit, onAlbum: (Long) 
     val photoInfo by produceState(PhotoInfo(), m.id) { if (!m.isVideo) value = MediaInfo.read(ctx, m.uri) }
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
         Text(DateLabels.dateTime(m.takenAt), style = MaterialTheme.typography.headlineSmall)
+        d.caption?.let { caption ->
+            Spacer(Modifier.height(8.dp))
+            Text(caption, style = MaterialTheme.typography.bodyLarge)
+        }
         Spacer(Modifier.height(12.dp))
         InfoRow("File", m.name)
         d.path?.let { InfoRow("Folder", it.trimEnd('/')) }

@@ -22,7 +22,7 @@ import com.pdrajan.dotscreenshots.data.ShotsRepository
 import com.pdrajan.dotscreenshots.index.IndexEngine
 import com.pdrajan.dotscreenshots.index.IndexScheduler
 import com.pdrajan.dotscreenshots.index.ModelHub
-import com.pdrajan.dotscreenshots.index.PowerGate
+import com.pdrajan.dot.llm.PowerGate
 import com.pdrajan.dotscreenshots.index.SummaryEngine
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope

@@ -14,6 +14,8 @@
 
 #include "ggml-backend.h"
 #include "llama.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -31,6 +33,8 @@ struct Engine {
     // Set when the model was opened from a file descriptor (a file picked from shared storage).
     FILE *file = nullptr;
     llama_model *model = nullptr;
+    // Image understanding (a vision model's projector), when loaded.
+    mtmd_context *vision = nullptr;
     llama_context *ctx = nullptr;
     const llama_vocab *vocab = nullptr;
     int n_ctx = 0;
@@ -101,6 +105,54 @@ bool feed(Engine *engine, const std::vector<llama_token> &tokens) {
         }
     }
     return true;
+}
+
+std::string piece(const llama_vocab *vocab, llama_token token);
+
+// Greedy (or sampled) decoding with a light repetition penalty, optionally constrained by a GBNF
+// grammar. Null (with last_error set) for an invalid grammar.
+llama_sampler *make_sampler(Engine *engine, const std::string &grammar, float temperature, int seed) {
+    llama_sampler *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    if (!grammar.empty()) {
+        llama_sampler *g = llama_sampler_init_grammar(engine->vocab, grammar.c_str(), "root");
+        if (g == nullptr) {
+            llama_sampler_free(smpl);
+            engine->last_error = "invalid grammar";
+            return nullptr;
+        }
+        llama_sampler_chain_add(smpl, g);
+    }
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(llama_vocab_n_tokens(engine->vocab), 64, 1.1f, 0.0f, 0.0f));
+    if (temperature <= 0.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    } else {
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(static_cast<uint32_t>(seed)));
+    }
+    return smpl;
+}
+
+// Generates up to [max_tokens] after what's in the KV cache. Generated tokens are recorded in
+// engine->cached when [track] (text prompts), so the next prompt can reuse them.
+std::string sample_loop(Engine *engine, llama_sampler *smpl, int max_tokens, bool track) {
+    std::string out;
+    for (int i = 0; i < max_tokens; i++) {
+        if (engine->cancel) {
+            engine->last_error = "cancelled";
+            break;
+        }
+        llama_token token = llama_sampler_sample(smpl, engine->ctx, -1);
+        if (llama_vocab_is_eog(engine->vocab, token)) break;
+        out += piece(engine->vocab, token);
+        if (llama_decode(engine->ctx, llama_batch_get_one(&token, 1)) != 0) {
+            reset_cache(engine);
+            engine->last_error = "decode failed";
+            break;
+        }
+        if (track) engine->cached.push_back(token);
+    }
+    return out;
 }
 
 std::string piece(const llama_vocab *vocab, llama_token token) {
@@ -214,49 +266,102 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeGenerate(JNIEnv *env, jclass, jlong h
         return nullptr;
     }
 
-    llama_sampler *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    if (!grammar.empty()) {
-        llama_sampler *g = llama_sampler_init_grammar(engine->vocab, grammar.c_str(), "root");
-        if (g == nullptr) {
-            llama_sampler_free(smpl);
-            engine->last_error = "invalid grammar";
-            return nullptr;
-        }
-        llama_sampler_chain_add(smpl, g);
-    }
-    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(llama_vocab_n_tokens(engine->vocab), 64, 1.1f, 0.0f, 0.0f));
-    if (temperature <= 0.0f) {
-        llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
-    } else {
-        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
-        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
-        llama_sampler_chain_add(smpl, llama_sampler_init_dist(static_cast<uint32_t>(seed)));
-    }
-
+    llama_sampler *smpl = make_sampler(engine, grammar, temperature, seed);
+    if (smpl == nullptr) return nullptr;
     if (!feed(engine, tokens)) {
         llama_sampler_free(smpl);
         return nullptr;
     }
-
-    std::string out;
-    for (int i = 0; i < max_tokens; i++) {
-        if (engine->cancel) {
-            engine->last_error = "cancelled";
-            break;
-        }
-        llama_token token = llama_sampler_sample(smpl, engine->ctx, -1);
-        if (llama_vocab_is_eog(engine->vocab, token)) break;
-        out += piece(engine->vocab, token);
-        if (llama_decode(engine->ctx, llama_batch_get_one(&token, 1)) != 0) {
-            reset_cache(engine);
-            engine->last_error = "decode failed";
-            break;
-        }
-        engine->cached.push_back(token);
-    }
+    const std::string out = sample_loop(engine, smpl, max_tokens, true);
     llama_sampler_free(smpl);
     if (engine->last_error == "cancelled") return nullptr;
     return to_bytes(env, out);
+}
+
+// Loads a vision model's projector (mmproj) for the loaded text model, so nativeDescribe can see
+// images. [max_image_tokens] > 0 caps how many tokens an image becomes (where the model allows).
+JNIEXPORT jboolean JNICALL
+Java_com_pdrajan_dot_llm_LlamaNative_nativeLoadVision(JNIEnv *env, jclass, jlong handle, jstring jpath, jint n_threads,
+                                                       jint max_image_tokens) {
+    auto *engine = reinterpret_cast<Engine *>(handle);
+    if (engine->vision != nullptr) return JNI_TRUE;
+    mtmd_context_params params = mtmd_context_params_default();
+    params.use_gpu = false;
+    params.print_timings = false;
+    params.warmup = false;
+    params.n_threads = n_threads;
+    if (max_image_tokens > 0) params.image_max_tokens = max_image_tokens;
+    const char *path = env->GetStringUTFChars(jpath, nullptr);
+    engine->vision = mtmd_init_from_file(path, engine->model, params);
+    env->ReleaseStringUTFChars(jpath, path);
+    if (engine->vision == nullptr || !mtmd_support_vision(engine->vision)) {
+        LOGE("vision projector load failed");
+        if (engine->vision != nullptr) mtmd_free(engine->vision);
+        engine->vision = nullptr;
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
+
+// Answers [jinstruction] about an RGB image ([w] x [h], 3 bytes per pixel) using the model's own
+// chat template. Returns the UTF-8 answer, or null on failure (see nativeLastError).
+JNIEXPORT jbyteArray JNICALL
+Java_com_pdrajan_dot_llm_LlamaNative_nativeDescribe(JNIEnv *env, jclass, jlong handle, jbyteArray jrgb, jint w, jint h,
+                                                     jbyteArray jinstruction, jint max_tokens) {
+    auto *engine = reinterpret_cast<Engine *>(handle);
+    engine->cancel = false;
+    engine->last_error.clear();
+    if (engine->vision == nullptr) {
+        engine->last_error = "no vision projector";
+        return nullptr;
+    }
+    const jsize n_bytes = env->GetArrayLength(jrgb);
+    if (w <= 0 || h <= 0 || n_bytes != w * h * 3) {
+        engine->last_error = "bad image size";
+        return nullptr;
+    }
+    std::vector<unsigned char> rgb(static_cast<size_t>(n_bytes));
+    env->GetByteArrayRegion(jrgb, 0, n_bytes, reinterpret_cast<jbyte *>(rgb.data()));
+
+    // The image goes where the media marker is; the model's chat template wraps the turn.
+    const std::string content = std::string(mtmd_default_marker()) + to_string(env, jinstruction);
+    llama_chat_message message{"user", content.c_str()};
+    const char *tmpl = llama_model_chat_template(engine->model, nullptr);
+    std::vector<char> buf(content.size() * 2 + 512);
+    int32_t n = llama_chat_apply_template(tmpl, &message, 1, true, buf.data(), static_cast<int32_t>(buf.size()));
+    if (n > static_cast<int32_t>(buf.size())) {
+        buf.resize(static_cast<size_t>(n));
+        n = llama_chat_apply_template(tmpl, &message, 1, true, buf.data(), static_cast<int32_t>(buf.size()));
+    }
+    const std::string prompt = n > 0 ? std::string(buf.data(), static_cast<size_t>(n))
+                                     : "<|im_start|>user\n" + content + "<|im_end|>\n<|im_start|>assistant\n";
+
+    mtmd_bitmap *bitmap = mtmd_bitmap_init(static_cast<uint32_t>(w), static_cast<uint32_t>(h), rgb.data());
+    mtmd_input_chunks *chunks = mtmd_input_chunks_init();
+    mtmd_input_text text{prompt.c_str(), prompt.size(), true, true};
+    const mtmd_bitmap *bitmaps[] = {bitmap};
+    jbyteArray result = nullptr;
+    if (mtmd_tokenize(engine->vision, chunks, &text, bitmaps, 1) != 0) {
+        engine->last_error = "image tokenize failed";
+    } else if (static_cast<int>(mtmd_helper_get_n_tokens(chunks)) + max_tokens > engine->n_ctx) {
+        engine->last_error = "image prompt too long";
+    } else {
+        // Images aren't tracked as tokens: start from an empty cache, and leave it marked empty.
+        reset_cache(engine);
+        llama_pos n_past = 0;
+        if (mtmd_helper_eval_chunks(engine->vision, engine->ctx, chunks, 0, 0, engine->n_batch, true, &n_past) != 0) {
+            engine->last_error = "image decode failed";
+        } else {
+            llama_sampler *smpl = make_sampler(engine, "", 0.0f, 0);
+            const std::string out = sample_loop(engine, smpl, max_tokens, false);
+            llama_sampler_free(smpl);
+            if (engine->last_error != "cancelled") result = to_bytes(env, out);
+        }
+        reset_cache(engine);
+    }
+    mtmd_input_chunks_free(chunks);
+    mtmd_bitmap_free(bitmap);
+    return result;
 }
 
 JNIEXPORT jstring JNICALL
@@ -274,6 +379,7 @@ JNIEXPORT void JNICALL
 Java_com_pdrajan_dot_llm_LlamaNative_nativeFree(JNIEnv *, jclass, jlong handle) {
     auto *engine = reinterpret_cast<Engine *>(handle);
     if (engine == nullptr) return;
+    if (engine->vision != nullptr) mtmd_free(engine->vision);
     llama_free(engine->ctx);
     llama_model_free(engine->model);
     if (engine->file != nullptr) fclose(engine->file);

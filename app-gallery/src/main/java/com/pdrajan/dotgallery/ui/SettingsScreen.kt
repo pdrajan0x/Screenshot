@@ -139,6 +139,7 @@ fun SettingsScreen(nav: GalleryNav) {
                     onCheckedChange = { c.settings.setReadHindi(it) },
                 )
             }
+            PhotoDescriptionsPanel(c)
             SettingsRow(
                 title = "Re-scan library",
                 subtitle = "Analyses every photo again with the current settings. Albums, favourites and names are kept.",

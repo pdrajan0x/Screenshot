@@ -41,14 +41,16 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, 
                 dhash INTEGER,
                 sharpness REAL,
                 index_version INTEGER NOT NULL DEFAULT 0,
-                ocr_pending INTEGER NOT NULL DEFAULT 0
+                ocr_pending INTEGER NOT NULL DEFAULT 0,
+                caption TEXT,
+                caption_state INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX media_taken ON media(taken_at DESC)")
         db.execSQL("CREATE INDEX media_bucket ON media(bucket_id)")
         db.execSQL("CREATE INDEX media_state ON media(state)")
-        db.execSQL("CREATE VIRTUAL TABLE media_fts USING fts4(name, ocr_text, tags, tokenize=unicode61)")
+        createFts(db)
         db.execSQL("CREATE TABLE embeddings(media_id INTEGER NOT NULL, crop INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY(media_id, crop))")
 
         db.execSQL("CREATE TABLE albums(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_at INTEGER NOT NULL)")
@@ -107,11 +109,27 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, 
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE media ADD COLUMN ocr_pending INTEGER NOT NULL DEFAULT 0")
+        if (oldVersion < 3) {
+            // Photo descriptions (on-device vision model), searchable: the search index is rebuilt.
+            db.execSQL("ALTER TABLE media ADD COLUMN caption TEXT")
+            db.execSQL("ALTER TABLE media ADD COLUMN caption_state INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("DROP TABLE IF EXISTS media_fts")
+            createFts(db)
+            db.execSQL("INSERT INTO media_fts(docid, $FTS_COLUMNS) SELECT id, $FTS_SOURCE FROM media")
+        }
+    }
+
+    private fun createFts(db: SQLiteDatabase) {
+        db.execSQL("CREATE VIRTUAL TABLE media_fts USING fts4($FTS_COLUMNS, tokenize=unicode61)")
     }
 
     companion object {
         const val NAME = "gallery.db"
-        const val VERSION = 2
+        const val VERSION = 3
+
+        /** Full-text columns, and the media expressions that fill them (same order). */
+        const val FTS_COLUMNS = "name, ocr_text, tags, caption"
+        const val FTS_SOURCE = "name, COALESCE(ocr_text, ''), tags, COALESCE(caption, '')"
         const val INDEX_VERSION = 1
     }
 }

@@ -6,6 +6,7 @@ import com.pdrajan.dot.engine.SummaryParser
 import com.pdrajan.dot.engine.SummaryPrompt
 import com.pdrajan.dot.llm.LlamaEngine
 import com.pdrajan.dot.llm.ModelDownloader
+import com.pdrajan.dot.llm.PowerGate
 import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dotscreenshots.data.Settings
 import com.pdrajan.dotscreenshots.data.ShotsRepository
@@ -123,7 +124,7 @@ class SummaryEngine(
 
     /** Logs when summaries pause or resume for battery or heat (once per change, not per call). */
     private fun blocked(userAsked: Boolean): Boolean {
-        val reason = power.summaryBlocker(userAsked)
+        val reason = power.blocker(userAsked)
         if (reason != lastBlocker) {
             DotLog.i(if (reason != null) "summary: paused ($reason)" else "summary: allowed again")
             lastBlocker = reason

@@ -59,6 +59,14 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        jniLibs {
+            // llama.cpp (photo descriptions) picks its CPU backend by scanning nativeLibraryDir at
+            // runtime, so native libraries must be extracted on install.
+            useLegacyPackaging = true
+        }
+    }
+
     lint {
         checkReleaseBuilds = false
         abortOnError = false
@@ -80,6 +88,7 @@ dependencies {
     implementation(project(":core:media"))
     implementation(project(":core:ml"))
     implementation(project(":core:engine"))
+    implementation(project(":core:llm"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
