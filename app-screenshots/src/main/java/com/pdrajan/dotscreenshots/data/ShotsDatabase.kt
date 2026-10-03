@@ -36,13 +36,20 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
                 favorite INTEGER NOT NULL DEFAULT 0,
                 index_version INTEGER NOT NULL DEFAULT 0,
                 ocr_pending INTEGER NOT NULL DEFAULT 0,
-                indexed_at INTEGER
+                indexed_at INTEGER,
+                app_source TEXT,
+                app_package TEXT,
+                page_url TEXT,
+                title TEXT,
+                summary TEXT,
+                tags TEXT,
+                summary_state INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX shots_taken ON shots(taken_at DESC)")
         db.execSQL("CREATE INDEX shots_state ON shots(state)")
-        db.execSQL("CREATE VIRTUAL TABLE shots_fts USING fts4(ocr_text, note, app, tokenize=unicode61)")
+        createFts(db)
         db.execSQL(
             "CREATE TABLE embeddings(shot_id INTEGER NOT NULL, crop INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY(shot_id, crop))",
         )
@@ -57,11 +64,28 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE shots ADD COLUMN ocr_pending INTEGER NOT NULL DEFAULT 0")
+        if (oldVersion < 3) {
+            listOf("app_source TEXT", "app_package TEXT", "page_url TEXT", "title TEXT", "summary TEXT", "tags TEXT",
+                "summary_state INTEGER NOT NULL DEFAULT 0").forEach { db.execSQL("ALTER TABLE shots ADD COLUMN $it") }
+            // The search index gains the summary columns: rebuild it from the rows.
+            db.execSQL("DROP TABLE IF EXISTS shots_fts")
+            createFts(db)
+            db.execSQL("INSERT INTO shots_fts(docid, $FTS_COLUMNS) SELECT id, $FTS_SOURCE FROM shots")
+        }
+    }
+
+    private fun createFts(db: SQLiteDatabase) {
+        db.execSQL("CREATE VIRTUAL TABLE shots_fts USING fts4($FTS_COLUMNS, tokenize=unicode61)")
     }
 
     companion object {
         const val NAME = "shots.db"
-        const val VERSION = 2
+        const val VERSION = 3
+
+        /** Full-text columns, and the shots expressions that fill them (same order). */
+        const val FTS_COLUMNS = "ocr_text, note, app, title, summary, tags"
+        const val FTS_SOURCE =
+            "COALESCE(ocr_text,''), COALESCE(note,''), COALESCE(app,''), COALESCE(title,''), COALESCE(summary,''), COALESCE(tags,'')"
 
         /**
          * Bump when the analysis pipeline changes in a way that makes old results stale

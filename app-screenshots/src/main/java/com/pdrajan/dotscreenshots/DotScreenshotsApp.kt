@@ -10,6 +10,10 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
+import com.pdrajan.dot.design.CrashLog
+import com.pdrajan.dot.llm.ModelDownloader
+import com.pdrajan.dot.llm.Models
+import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaStoreSource
 import com.pdrajan.dotscreenshots.data.Settings
 import com.pdrajan.dotscreenshots.data.ShotsDatabase
@@ -17,8 +21,7 @@ import com.pdrajan.dotscreenshots.data.ShotsRepository
 import com.pdrajan.dotscreenshots.index.IndexEngine
 import com.pdrajan.dotscreenshots.index.IndexScheduler
 import com.pdrajan.dotscreenshots.index.ModelHub
-import com.pdrajan.dot.design.CrashLog
-import com.pdrajan.dot.media.DotLog
+import com.pdrajan.dotscreenshots.index.SummaryEngine
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +68,8 @@ class AppContainer(val context: Context) {
     val hub = ModelHub(context, scope)
     val engine = IndexEngine(context, repo, settings, hub, media)
     val scheduler = IndexScheduler(context) { settings.backlogWhileCharging.value }
+    val modelDownload = ModelDownloader(context, Models.SUMMARY)
+    val summaries = SummaryEngine(context, repo, settings, modelDownload, scope)
 
     /** Ids of the last search's results, so the viewer can swipe through them. */
     @Volatile var lastSearchIds: List<Long> = emptyList()
@@ -74,18 +79,28 @@ class AppContainer(val context: Context) {
     val backlogRunning: StateFlow<Boolean> = _backlogRunning.asStateFlow()
 
     private var foregroundJob: Job? = null
+    private var downloadJob: Job? = null
 
-    /** App opened: pick up new screenshots right away; the old backlog waits for charging. */
+    /**
+     * App opened: read new screenshots right away. With the phone charging (or processing on
+     * battery allowed) keep going through the backlog and the summaries; on battery only the
+     * newest screenshots get summaries.
+     */
     fun onForeground() {
         foregroundJob?.cancel()
         foregroundJob = scope.launch {
             runCatching { engine.sync() }
-            // While the app is open, keep going batch after batch if the phone is charging
-            // (or the user allowed processing on battery); otherwise just the newest batch.
-            while (isActive && engine.process(limit = FOREGROUND_BATCH) > 0 && (isCharging() || !settings.backlogWhileCharging.value)) Unit
-            if (repo.counts().pending > 0) scheduler.scheduleBacklog()
+            while (isActive && engine.process(limit = FOREGROUND_BATCH) > 0 && unrestricted()) Unit
+            if (unrestricted()) {
+                while (isActive && summaries.process(limit = SUMMARY_BATCH) > 0 && unrestricted()) Unit
+            } else {
+                summaries.process(limit = 5, since = System.currentTimeMillis() - RECENT_MILLIS)
+            }
+            if (repo.counts().pending > 0 || (summaries.available && repo.summaryCounts().waiting > 0)) scheduler.scheduleBacklog()
         }
     }
+
+    private fun unrestricted() = isCharging() || !settings.backlogWhileCharging.value
 
     private fun isCharging(): Boolean =
         runCatching { context.getSystemService(android.os.BatteryManager::class.java).isCharging }.getOrDefault(false)
@@ -94,7 +109,7 @@ class AppContainer(val context: Context) {
         if (!_backlogRunning.value) foregroundJob?.cancel()
     }
 
-    /** "Process now": work through every pending screenshot while the app stays open. */
+    /** "Process now": read every pending screenshot, then write every summary, while the app stays open. */
     fun processAllNow() {
         if (_backlogRunning.value) return
         foregroundJob?.cancel()
@@ -103,6 +118,7 @@ class AppContainer(val context: Context) {
             try {
                 runCatching { engine.sync() }
                 while (isActive && engine.process(limit = 50) > 0) Unit
+                while (isActive && summaries.process(limit = SUMMARY_BATCH) > 0) Unit
             } finally {
                 _backlogRunning.value = false
             }
@@ -114,7 +130,30 @@ class AppContainer(val context: Context) {
         _backlogRunning.value = false
     }
 
+    /** Downloads the summary model (about 1 GB, resumable), then starts summarising. */
+    fun downloadModel() {
+        if (downloadJob?.isActive == true) return
+        downloadJob = scope.launch {
+            modelDownload.download()
+            if (modelDownload.isReady()) onForeground()
+        }
+    }
+
+    fun pauseDownload() {
+        downloadJob?.cancel()
+    }
+
+    fun deleteModel() {
+        downloadJob?.cancel()
+        scope.launch {
+            summaries.unload()
+            modelDownload.delete()
+        }
+    }
+
     private companion object {
         const val FOREGROUND_BATCH = 60
+        const val SUMMARY_BATCH = 10
+        const val RECENT_MILLIS = 2L * 24 * 60 * 60_000
     }
 }

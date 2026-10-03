@@ -10,6 +10,7 @@ import com.pdrajan.dot.engine.EntityType
 import com.pdrajan.dot.engine.FtsQuery
 import com.pdrajan.dot.engine.HybridRanker
 import com.pdrajan.dot.engine.QuantizedVector
+import com.pdrajan.dot.engine.ScreenshotSummary
 import com.pdrajan.dot.engine.VectorHit
 import com.pdrajan.dot.engine.VectorIndex
 import com.pdrajan.dot.media.MediaItem
@@ -98,13 +99,20 @@ class ShotsRepository(private val database: ShotsDatabase) {
     fun observeDetail(id: Long): Flow<ShotDetail?> = observe { detail(id) }
 
     private fun detail(id: Long): ShotDetail? {
-        val row = db.rawQuery("SELECT $SHOT_COLUMNS, ocr_text, entities, note FROM shots WHERE id = ?", arrayOf(id.toString())).use { c ->
+        val row = db.rawQuery(
+            "SELECT $SHOT_COLUMNS, ocr_text, entities, note, summary, tags, page_url, app_source FROM shots WHERE id = ?",
+            arrayOf(id.toString()),
+        ).use { c ->
             if (!c.moveToFirst()) return null
             DetailRow(
                 shot = c.shot(),
                 text = c.getString(SHOT_COLUMN_COUNT) ?: "",
                 entities = c.getString(SHOT_COLUMN_COUNT + 1),
                 note = c.getString(SHOT_COLUMN_COUNT + 2) ?: "",
+                summary = c.getString(SHOT_COLUMN_COUNT + 3),
+                tags = c.getString(SHOT_COLUMN_COUNT + 4),
+                pageUrl = c.getString(SHOT_COLUMN_COUNT + 5),
+                appSource = c.getString(SHOT_COLUMN_COUNT + 6),
             )
         }
         val collections = db.rawQuery(
@@ -116,10 +124,29 @@ class ShotsRepository(private val database: ShotsDatabase) {
             """.trimIndent(),
             arrayOf(id.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(ShotCollection(c.getLong(0), c.getString(1), c.getInt(2), null)) } }
-        return ShotDetail(row.shot, row.text, decodeEntities(row.entities), row.note, collections)
+        return ShotDetail(
+            shot = row.shot,
+            text = row.text,
+            entities = decodeEntities(row.entities),
+            note = row.note,
+            collections = collections,
+            summary = row.summary,
+            tags = row.tags?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty(),
+            pageUrl = row.pageUrl,
+            appSource = row.appSource,
+        )
     }
 
-    private data class DetailRow(val shot: Shot, val text: String, val entities: String?, val note: String)
+    private data class DetailRow(
+        val shot: Shot,
+        val text: String,
+        val entities: String?,
+        val note: String,
+        val summary: String?,
+        val tags: String?,
+        val pageUrl: String?,
+        val appSource: String?,
+    )
 
     fun observeCounts(): Flow<IndexCounts> = observe { counts() }
 
@@ -170,12 +197,12 @@ class ShotsRepository(private val database: ShotsDatabase) {
     /** Ids still waiting for analysis, newest first. */
     suspend fun pending(limit: Int): List<PendingShot> = withContext(Dispatchers.IO) {
         db.rawQuery(
-            "SELECT id, uri, name FROM shots WHERE state = ? ORDER BY taken_at DESC LIMIT ?",
+            "SELECT id, uri, name, taken_at FROM shots WHERE state = ? ORDER BY taken_at DESC LIMIT ?",
             arrayOf(IndexState.PENDING.code.toString(), limit.toString()),
-        ).use { c -> buildList { while (c.moveToNext()) add(PendingShot(c.getLong(0), c.getString(1).toUri(), c.getString(2))) } }
+        ).use { c -> buildList { while (c.moveToNext()) add(PendingShot(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getLong(3))) } }
     }
 
-    data class PendingShot(val id: Long, val uri: android.net.Uri, val name: String)
+    data class PendingShot(val id: Long, val uri: android.net.Uri, val name: String, val takenAt: Long)
 
     // ---------------------------------------------------------------- search
 
@@ -188,8 +215,12 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val match = FtsQuery.build(query)
         if (match != null) {
             try {
-                db.rawQuery("SELECT docid, COALESCE(ocr_text,''), COALESCE(note,''), COALESCE(app,'') FROM shots_fts WHERE shots_fts MATCH ? LIMIT 1000", arrayOf(match)).use { c ->
-                    while (c.moveToNext()) rows += Triple(c.getLong(0), c.getString(1) + " " + c.getString(3), c.getString(2))
+                db.rawQuery(
+                    "SELECT docid, ocr_text || ' ' || app || ' ' || title || ' ' || summary || ' ' || tags, note " +
+                        "FROM shots_fts WHERE shots_fts MATCH ? LIMIT 1000",
+                    arrayOf(match),
+                ).use { c ->
+                    while (c.moveToNext()) rows += Triple(c.getLong(0), c.getString(1), c.getString(2))
                 }
             } catch (_: SQLiteException) {
                 // Odd input the FTS parser rejects; the substring fallback below still runs.
@@ -198,9 +229,11 @@ class ShotsRepository(private val database: ShotsDatabase) {
         if (rows.isEmpty()) {
             val like = "%" + query.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             db.rawQuery(
-                "SELECT id, COALESCE(ocr_text,'') || ' ' || COALESCE(app,''), COALESCE(note,'') FROM shots " +
-                    "WHERE ocr_text LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\' OR app LIKE ? ESCAPE '\\' LIMIT 1000",
-                arrayOf(like, like, like),
+                "SELECT id, COALESCE(ocr_text,'') || ' ' || COALESCE(app,'') || ' ' || COALESCE(title,'') || ' ' || " +
+                    "COALESCE(summary,'') || ' ' || COALESCE(tags,''), COALESCE(note,'') FROM shots " +
+                    "WHERE ocr_text LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\' OR app LIKE ? ESCAPE '\\' " +
+                    "OR title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' LIMIT 1000",
+                arrayOf(like, like, like, like, like, like),
             ).use { c -> while (c.moveToNext()) rows += Triple(c.getLong(0), c.getString(1), c.getString(2)) }
         }
         fun score(text: String) = terms.sumOf { t -> occurrences(text.lowercase(), t) }
@@ -319,6 +352,11 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 put("index_version", ShotsDatabase.INDEX_VERSION)
                 put("ocr_pending", if (analysis.ocrPending) 1 else 0)
                 put("indexed_at", System.currentTimeMillis())
+                put("app_source", analysis.appSource?.code)
+                put("app_package", analysis.appPackage)
+                put("page_url", analysis.pageUrl)
+                // New text: the summary (if any) is rewritten from it.
+                put("summary_state", SUMMARY_PENDING)
             }, "id = ?", arrayOf(id.toString()))
             rewriteFts(id)
             db.delete("embeddings", "shot_id = ?", arrayOf(id.toString()))
@@ -354,7 +392,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
     private fun rewriteFts(id: Long) {
         db.delete("shots_fts", "docid = ?", arrayOf(id.toString()))
         db.execSQL(
-            "INSERT INTO shots_fts(docid, ocr_text, note, app) SELECT id, COALESCE(ocr_text,''), COALESCE(note,''), COALESCE(app,'') FROM shots WHERE id = ?",
+            "INSERT INTO shots_fts(docid, ${ShotsDatabase.FTS_COLUMNS}) SELECT id, ${ShotsDatabase.FTS_SOURCE} FROM shots WHERE id = ?",
             arrayOf<Any>(id),
         )
     }
@@ -426,6 +464,71 @@ class ShotsRepository(private val database: ShotsDatabase) {
         changed()
     }
 
+    // ---------------------------------------------------------------- summaries (on-device model)
+
+    /** Indexed screenshots still waiting for a summary, newest first; [since] limits to recent ones. */
+    suspend fun summaryQueue(limit: Int, since: Long = 0L): List<SummaryJob> = withContext(Dispatchers.IO) {
+        db.rawQuery(
+            "SELECT id, app, COALESCE(ocr_text,''), name FROM shots WHERE state = ? AND summary_state = ? AND taken_at >= ? " +
+                "ORDER BY taken_at DESC LIMIT ?",
+            arrayOf(IndexState.INDEXED.code.toString(), SUMMARY_PENDING.toString(), since.toString(), limit.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(SummaryJob(c.getLong(0), c.getString(1), c.getString(2), c.getString(3))) } }
+    }
+
+    suspend fun saveSummary(id: Long, summary: ScreenshotSummary, guessedApp: String?) = withContext(Dispatchers.IO) {
+        db.beginTransaction()
+        try {
+            db.update("shots", ContentValues().apply {
+                put("title", summary.title.ifBlank { null })
+                put("summary", summary.summary.ifBlank { null })
+                put("tags", summary.tags.joinToString(", ").ifEmpty { null })
+                put("summary_state", SUMMARY_DONE)
+            }, "id = ?", arrayOf(id.toString()))
+            if (guessedApp != null) {
+                db.execSQL("UPDATE shots SET app = ?, app_source = 'model' WHERE id = ? AND app IS NULL", arrayOf<Any>(guessedApp, id))
+            }
+            rewriteFts(id)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        changed()
+    }
+
+    suspend fun markSummaryFailed(id: Long) = withContext(Dispatchers.IO) {
+        db.execSQL("UPDATE shots SET summary_state = ? WHERE id = ?", arrayOf<Any>(SUMMARY_FAILED, id))
+        changed()
+    }
+
+    fun summaryCounts(): SummaryCounts =
+        db.rawQuery(
+            "SELECT SUM(summary_state = ?), SUM(summary_state = ?) FROM shots WHERE state = ?",
+            arrayOf(SUMMARY_DONE.toString(), SUMMARY_PENDING.toString(), IndexState.INDEXED.code.toString()),
+        ).use { c -> if (c.moveToFirst()) SummaryCounts(c.getInt(0), c.getInt(1)) else SummaryCounts(0, 0) }
+
+    fun observeSummaryCounts(): Flow<SummaryCounts> = observe { summaryCounts() }
+
+    // ---------------------------------------------------------------- source app
+
+    /** Recent screenshots whose app wasn't taken from the system's usage history. */
+    suspend fun appBackfillCandidates(since: Long): List<Pair<Long, Long>> = withContext(Dispatchers.IO) {
+        db.rawQuery(
+            "SELECT id, taken_at FROM shots WHERE taken_at >= ? AND (app_source IS NULL OR app_source NOT IN ('usage', 'file'))",
+            arrayOf(since.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0) to c.getLong(1)) } }
+    }
+
+    /** Records the exact app from usage history; the summary is redone so it can mention it. */
+    suspend fun setExactApp(id: Long, label: String, packageName: String) = withContext(Dispatchers.IO) {
+        db.execSQL(
+            "UPDATE shots SET app = ?, app_package = ?, app_source = 'usage', " +
+                "summary_state = CASE WHEN summary_state = ? AND (app IS NULL OR app != ?) THEN ? ELSE summary_state END WHERE id = ?",
+            arrayOf<Any>(label, packageName, SUMMARY_DONE, label, SUMMARY_PENDING, id),
+        )
+        rewriteFts(id)
+        changed()
+    }
+
     fun databaseSizeBytes(): Long = database.readableDatabase.path?.let { java.io.File(it).length() } ?: 0L
 
     // ---------------------------------------------------------------- mapping
@@ -442,13 +545,18 @@ class ShotsRepository(private val database: ShotsDatabase) {
         app = getString(8),
         categories = getString(9).split(',').filter { it.isNotEmpty() },
         favorite = getInt(10) == 1,
+        title = getString(11),
     )
 
     private fun Cursor.shots(): List<Shot> = buildList(count) { while (moveToNext()) add(shot()) }
 
     companion object {
-        private const val SHOT_COLUMNS = "id, uri, name, taken_at, width, height, size, state, app, categories, favorite"
-        private const val SHOT_COLUMN_COUNT = 11
+        const val SUMMARY_PENDING = 0
+        const val SUMMARY_DONE = 1
+        const val SUMMARY_FAILED = 2
+
+        private const val SHOT_COLUMNS = "id, uri, name, taken_at, width, height, size, state, app, categories, favorite, title"
+        private const val SHOT_COLUMN_COUNT = 12
 
         private fun occurrences(text: String, term: String): Int {
             var n = 0

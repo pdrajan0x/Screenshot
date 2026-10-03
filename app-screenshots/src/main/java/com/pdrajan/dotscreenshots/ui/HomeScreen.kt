@@ -95,6 +95,7 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
     val favoriteCount = c.repo.observeFavorites().map { it.size }.stateIn(viewModelScope, started, 0)
     val progress: StateFlow<IndexProgress> = c.engine.progress
     val lastError: StateFlow<String?> = c.engine.lastError
+    val summaryProgress: StateFlow<IndexProgress> = c.summaries.progress
     val backlogRunning: StateFlow<Boolean> = c.backlogRunning
     val columns: StateFlow<Int> = c.settings.gridColumns
     val modelAvailable: Boolean get() = c.hub.available
@@ -165,6 +166,7 @@ fun HomeScreen(
     val favoriteCount by vm.favoriteCount.collectAsStateWithLifecycle()
     val progress by vm.progress.collectAsStateWithLifecycle()
     val lastError by vm.lastError.collectAsStateWithLifecycle()
+    val summaryProgress by vm.summaryProgress.collectAsStateWithLifecycle()
     var diagnostics by remember { mutableStateOf(false) }
     val backlogRunning by vm.backlogRunning.collectAsStateWithLifecycle()
     val columns by vm.columns.collectAsStateWithLifecycle()
@@ -224,7 +226,18 @@ fun HomeScreen(
                     DotSearchPill("Search your screenshots", onClick = onSearch, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                 }
                 fullSpan("status") {
-                    StatusStrip(progress, counts, backlogRunning, vm.modelAvailable, lastError, vm::processAll, vm::stopProcessing) { diagnostics = true }
+                    Column {
+                        StatusStrip(progress, counts, backlogRunning, vm.modelAvailable, lastError, vm::processAll, vm::stopProcessing) { diagnostics = true }
+                        if (summaryProgress.running) {
+                            DotProgressStrip(
+                                if (summaryProgress.preparing) "Loading the summary model…"
+                                else "Writing summaries · ${summaryProgress.done} of ${summaryProgress.total}",
+                                Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                progress = if (summaryProgress.total > 0 && !summaryProgress.preparing) summaryProgress.done.toFloat() / summaryProgress.total else null,
+                            )
+                        }
+                        SmartSearchTip(appContainer(), Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                    }
                 }
                 if (collections.isNotEmpty() || favoriteCount > 0) {
                     fullSpan("collections") {

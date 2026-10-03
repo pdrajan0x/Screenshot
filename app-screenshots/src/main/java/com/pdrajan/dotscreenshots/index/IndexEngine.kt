@@ -5,6 +5,7 @@ import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaAccess
 import com.pdrajan.dot.media.MediaPermissions
 import com.pdrajan.dot.media.MediaStoreSource
+import com.pdrajan.dot.ml.ForegroundAppResolver
 import com.pdrajan.dot.ml.ScreenshotAnalyzer
 import com.pdrajan.dot.ml.TextReader
 import com.pdrajan.dotscreenshots.data.Settings
@@ -47,12 +48,32 @@ class IndexEngine(
         val started = System.currentTimeMillis()
         val shots = media.screenshots()
         val result = repo.sync(shots)
+        backfillApps()
         val counts = repo.counts()
         DotLog.i(
             "sync: ${shots.size} screenshots on device, ${result.added} new, ${result.removed} removed · " +
                 "indexed ${counts.indexed}, pending ${counts.pending}, failed ${counts.failed} (${System.currentTimeMillis() - started} ms)",
         )
         return result
+    }
+
+    /** Which app each screenshot came from, from the system's usage history (needs Usage access). */
+    val foreground = ForegroundAppResolver(context)
+
+    /**
+     * Once Usage access is on, screenshots from the last week get their exact source app (even if
+     * they were indexed before), replacing guesses.
+     */
+    private suspend fun backfillApps() {
+        if (!foreground.hasAccess()) return
+        val candidates = repo.appBackfillCandidates(System.currentTimeMillis() - ForegroundAppResolver.HISTORY_MILLIS)
+        var found = 0
+        for ((id, takenAt) in candidates) {
+            val app = withContext(Dispatchers.IO) { foreground.appAt(takenAt) } ?: continue
+            repo.setExactApp(id, app.label, app.packageName)
+            found++
+        }
+        if (found > 0) DotLog.i("apps: $found screenshots matched to their app from usage history")
     }
 
     /**
@@ -94,7 +115,8 @@ class IndexEngine(
                 t = System.currentTimeMillis()
                 val classifier = hub.classifier() ?: return 0
                 DotLog.i("process: category prompts ready in ${System.currentTimeMillis() - t} ms")
-                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier)
+                val appLook = runCatching { hub.appLook() }.onFailure { DotLog.e("process: app look prompts unavailable", it) }.getOrNull()
+                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier, appLook, foreground.takeIf { it.hasAccess() })
                 _progress.value = IndexProgress(running = true, total = pending.size)
                 var noText = 0
                 for (item in pending) {
@@ -104,7 +126,7 @@ class IndexEngine(
                     }
                     currentCoroutineContext().ensureActive()
                     try {
-                        val analysis = withContext(Dispatchers.Default) { analyzer.analyze(item.uri, item.name) }
+                        val analysis = withContext(Dispatchers.Default) { analyzer.analyze(item.uri, item.name, item.takenAt) }
                         repo.saveAnalysis(item.id, analysis)
                         recordTime(analysis.durationMs)
                         if (analysis.ocrPending) noText++

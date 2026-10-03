@@ -22,6 +22,14 @@ class Settings(context: Context) {
     private val _onboardingDone = MutableStateFlow(prefs.getBoolean(KEY_ONBOARDED, false))
     val onboardingDone: StateFlow<Boolean> = _onboardingDone.asStateFlow()
 
+    private val _summaries = MutableStateFlow(prefs.getBoolean(KEY_SUMMARIES, true))
+    /** Write AI summaries (once the model is downloaded). */
+    val summariesEnabled: StateFlow<Boolean> = _summaries.asStateFlow()
+
+    private val _tipDismissed = MutableStateFlow(prefs.getBoolean(KEY_TIP, false))
+    /** The home screen's "make search smarter" card was dismissed. */
+    val smartTipDismissed: StateFlow<Boolean> = _tipDismissed.asStateFlow()
+
     private val _gridColumns = MutableStateFlow(prefs.getInt(KEY_COLUMNS, 3))
     val gridColumns: StateFlow<Int> = _gridColumns.asStateFlow()
 
@@ -50,6 +58,16 @@ class Settings(context: Context) {
         _onboardingDone.value = true
     }
 
+    fun setSummariesEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_SUMMARIES, enabled) }
+        _summaries.value = enabled
+    }
+
+    fun dismissSmartTip() {
+        prefs.edit { putBoolean(KEY_TIP, true) }
+        _tipDismissed.value = true
+    }
+
     fun setGridColumns(columns: Int) {
         prefs.edit { putInt(KEY_COLUMNS, columns) }
         _gridColumns.value = columns
@@ -62,5 +80,7 @@ class Settings(context: Context) {
         const val KEY_ONBOARDED = "onboarding_done"
         const val KEY_COLUMNS = "grid_columns"
         const val KEY_AVG_MS = "avg_index_ms"
+        const val KEY_SUMMARIES = "summaries"
+        const val KEY_TIP = "smart_tip_dismissed"
     }
 }

@@ -1,6 +1,7 @@
 package com.pdrajan.dotscreenshots.ui
 
 import android.content.ContentUris
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -35,6 +36,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
@@ -61,8 +63,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -79,6 +81,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.pdrajan.dot.design.DateLabels
 import com.pdrajan.dot.design.DotChip
+import com.pdrajan.dot.design.DotOutlinedButton
+import com.pdrajan.dot.design.DotTag
 import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.engine.Categories
@@ -325,8 +329,28 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
 
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
         Column(Modifier.padding(horizontal = 20.dp)) {
-            Text(d.shot.app ?: "Screenshot", style = MaterialTheme.typography.headlineMedium)
-            Text(DateLabels.dateTime(d.shot.takenAt), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val title = d.shot.title
+            Text(title ?: d.shot.app ?: "Screenshot", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                listOfNotNull(d.shot.app.takeIf { title != null }, DateLabels.dateTime(d.shot.takenAt)).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            d.summary?.let { summary ->
+                Spacer(Modifier.height(10.dp))
+                Text(summary, style = MaterialTheme.typography.bodyMedium)
+            }
+            d.pageUrl?.let { url ->
+                Spacer(Modifier.height(12.dp))
+                val host = runCatching { Uri.parse(url).host?.removePrefix("www.") }.getOrNull() ?: "page"
+                DotOutlinedButton("Open $host", onClick = { ctx.startSafely(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }, icon = Icons.AutoMirrored.Rounded.OpenInNew)
+            }
+            if (d.tags.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    d.tags.take(10).forEach { DotTag(it) }
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
 

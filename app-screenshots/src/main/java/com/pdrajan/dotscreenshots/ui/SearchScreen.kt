@@ -1,7 +1,9 @@
 package com.pdrajan.dotscreenshots.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -37,6 +39,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -282,8 +286,19 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit) {
                                         MatchReason.VISUAL in hit.reasons -> "visual"
                                         else -> null
                                     }
+                                    hit.shot.title?.let { title ->
+                                        Box(
+                                            Modifier
+                                                .align(Alignment.BottomCenter)
+                                                .fillMaxWidth()
+                                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))))
+                                                .padding(start = 8.dp, end = 8.dp, top = 18.dp, bottom = 6.dp),
+                                        ) {
+                                            Text(title, style = MaterialTheme.typography.labelSmall, color = Color.White, maxLines = 2)
+                                        }
+                                    }
                                     if (tag != null) {
-                                        DotTag(tag, Modifier.align(Alignment.BottomStart).padding(6.dp), accent = tag == "visual")
+                                        DotTag(tag, Modifier.align(Alignment.TopStart).padding(6.dp), accent = tag == "visual")
                                     }
                                 },
                             )

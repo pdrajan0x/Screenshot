@@ -25,6 +25,8 @@ data class Shot(
     val app: String?,
     val categories: List<String>,
     val favorite: Boolean,
+    /** Written by the on-device summary model; null until then. */
+    val title: String? = null,
 )
 
 /** Everything the detail screen shows for one screenshot. */
@@ -34,7 +36,19 @@ data class ShotDetail(
     val entities: List<Entity>,
     val note: String,
     val collections: List<ShotCollection>,
+    val summary: String? = null,
+    val tags: List<String> = emptyList(),
+    /** For browser screenshots: the page that was open. */
+    val pageUrl: String? = null,
+    /** How the source app was found: usage, file, visual or model. */
+    val appSource: String? = null,
 )
+
+/** Progress of the summary model over the library. */
+data class SummaryCounts(val done: Int, val waiting: Int)
+
+/** A screenshot waiting for its summary. */
+data class SummaryJob(val id: Long, val app: String?, val text: String, val name: String)
 
 data class ShotCollection(
     val id: Long,

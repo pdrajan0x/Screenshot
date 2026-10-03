@@ -79,7 +79,7 @@ object AppRecognizer {
         val lower = text.lowercase()
         val scores = HashMap<String, Float>()
         TEXT.forEach { (app, list) ->
-            val s = list.sumOf { c -> if (lower.contains(c.phrase)) c.weight.toDouble() else 0.0 }.toFloat()
+            val s = list.sumOf { c -> if (CategoryClassifier.containsKeyword(lower, c.phrase)) c.weight.toDouble() else 0.0 }.toFloat()
             if (s > 0f) scores[app] = s / 3f
         }
         visual?.forEach { (label, p) -> if (!label.startsWith("~")) scores.merge(label, p * 1.5f, Float::plus) }
@@ -106,4 +106,20 @@ object AppRecognizer {
 
     fun isBrowser(appLabel: String?, packageName: String? = null): Boolean =
         (packageName != null && packageName in BROWSER_PACKAGES) || (appLabel != null && appLabel.lowercase() in BROWSERS)
+}
+
+/** CLIP "which app does this look like" over [AppRecognizer.VISUAL]: max over prompts of the mean over crops. */
+class AppLookClassifier(private val prompts: Map<String, List<FloatArray>>, private val logitScale: Float) {
+
+    fun probabilities(cropEmbeddings: List<FloatArray>): Map<String, Float> {
+        if (cropEmbeddings.isEmpty() || prompts.isEmpty()) return emptyMap()
+        val labels = prompts.keys.toList()
+        val logits = labels.map { label ->
+            prompts.getValue(label).maxOf { p -> cropEmbeddings.map { VectorMath.dot(it, p) }.average().toFloat() } * logitScale
+        }
+        val max = logits.max()
+        val exp = logits.map { kotlin.math.exp((it - max).toDouble()) }
+        val sum = exp.sum()
+        return labels.indices.associate { labels[it] to (exp[it] / sum).toFloat() }
+    }
 }

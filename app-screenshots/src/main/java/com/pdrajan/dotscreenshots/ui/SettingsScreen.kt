@@ -111,6 +111,10 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
+            SectionLabel("Smarter search", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+            SmartSearchSettings(c)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
             SectionLabel("Battery", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
             SettingsSwitchRow(
                 title = "Process older screenshots only while charging",

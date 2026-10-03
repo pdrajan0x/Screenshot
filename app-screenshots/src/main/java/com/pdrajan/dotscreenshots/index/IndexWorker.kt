@@ -31,15 +31,23 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         var indexed = 0
         if (mode == MODE_NEW) {
             indexed = container.engine.process(limit = 30, deadline = deadline) { isStopped }
+            // A few seconds each: new screenshots get their summary right away, even on battery.
+            indexed += container.summaries.process(limit = 3, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline) { isStopped }
         } else {
             while (!isStopped && System.currentTimeMillis() < deadline) {
                 val n = container.engine.process(limit = 50, deadline = deadline) { isStopped }
                 if (n == 0) break
                 indexed += n
             }
+            while (!isStopped && System.currentTimeMillis() < deadline) {
+                val n = container.summaries.process(limit = 5, deadline = deadline) { isStopped }
+                if (n == 0) break
+                indexed += n
+            }
         }
 
-        val pending = container.repo.counts().pending
+        val pending = container.repo.counts().pending +
+            if (container.summaries.available) container.repo.summaryCounts().waiting else 0
         val scheduler = container.scheduler
         if (mode == MODE_NEW) scheduler.watchForNewScreenshots(afterCurrent = true)
         // Only chain another backlog run when this one got somewhere; a run that indexed nothing

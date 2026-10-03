@@ -1,6 +1,8 @@
 package com.pdrajan.dot.ml
 
 import android.content.Context
+import com.pdrajan.dot.engine.AppLookClassifier
+import com.pdrajan.dot.engine.AppRecognizer
 import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.engine.CategoryClassifier
 import com.pdrajan.dot.engine.PhotoTagger
@@ -35,6 +37,16 @@ object PromptBank {
         for (t in PhotoTags.ALL) byTag[t.id] = t.prompts.map { vectors[i++] }
         val background = PhotoTags.BACKGROUND.map { vectors[i++] }
         return PhotoTagger(byTag, background, clip.config.logitScale)
+    }
+
+    /** "Which app does this look like" (Dot Screenshots), for screenshots without usage history. */
+    fun appLook(context: Context, clip: ClipModel): AppLookClassifier {
+        val prompts = AppRecognizer.VISUAL.values.flatten()
+        val vectors = embed(context, clip, "applook", prompts)
+        var i = 0
+        val byApp = LinkedHashMap<String, List<FloatArray>>()
+        for ((app, list) in AppRecognizer.VISUAL) byApp[app] = list.map { vectors[i++] }
+        return AppLookClassifier(byApp, clip.config.logitScale)
     }
 
     fun embed(context: Context, clip: ClipModel, name: String, prompts: List<String>): List<FloatArray> {
