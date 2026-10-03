@@ -54,9 +54,11 @@ fun MediaGrid(
     header: LazyGridScope.() -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
-    val currentItems by rememberUpdatedState(items)
     val currentSelection by rememberUpdatedState(selection)
     val selectionMode = selection.isNotEmpty()
+    val groups = remember(items, columns, grouped) { if (grouped) sections(items, columns) else null }
+    val orderedIds = remember(items) { items.map { it.id } }
+    val currentIds by rememberUpdatedState(orderedIds)
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
         state = state,
@@ -64,11 +66,11 @@ fun MediaGrid(
         modifier = modifier
             .fillMaxSize()
             .pinchToChangeColumns(columns, onColumnsChange, min = 2, max = 7)
-            .dragToSelect(state, { currentSelection }, onSelectionChange, { currentItems.map { it.id } }, scope),
+            .dragToSelect(state, { currentSelection }, onSelectionChange, { currentIds }, scope),
     ) {
         header()
-        if (grouped) {
-            sections(items, columns).forEach { (label, list) ->
+        if (groups != null) {
+            groups.forEach { (label, list) ->
                 item(key = "h-$label", span = { GridItemSpan(maxLineSpan) }) {
                     Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, top = 18.dp, bottom = 8.dp))
                 }
