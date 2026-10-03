@@ -1,0 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0
+open_clip_torch==3.3.0
+timm>=1.0.20
+huggingface_hub
+safetensors
+onnx>=1.17
+onnxruntime>=1.20
+numpy
+ftfy
+regex

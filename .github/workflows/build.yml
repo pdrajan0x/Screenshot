@@ -1,0 +1,139 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  model:
+    name: Export MobileCLIP2-S0
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore exported model
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: model-out
+          key: clip-${{ hashFiles('tools/model/export_mobileclip.py', 'tools/model/requirements.txt') }}
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Export to ONNX
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          pip install -r tools/model/requirements.txt
+          python tools/model/export_mobileclip.py --out model-out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clip-model
+          path: model-out
+          retention-days: 3
+
+  android:
+    name: Build APKs
+    needs: model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-model
+          path: model-out
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Release APKs must keep the same signature so updates install over the old app.
+      # Preferred: repository secrets SIGNING_KEYSTORE_BASE64 + SIGNING_PASSWORD.
+      # Otherwise a key is generated once and kept in the Actions cache (never in git).
+      - name: Restore cached signing key
+        id: signing-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.dot-signing
+          key: dot-signing-v1
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          dir="$HOME/.dot-signing"
+          mkdir -p "$dir"
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$dir/secret.jks"
+            store="$dir/secret.jks"; pass="$KEYSTORE_PASSWORD"
+          else
+            if [ ! -f "$dir/cached.jks" ]; then
+              openssl rand -hex 24 > "$dir/cached.pass"
+              keytool -genkeypair -keystore "$dir/cached.jks" -storetype PKCS12 -alias dot \
+                -keyalg RSA -keysize 2048 -validity 36500 \
+                -storepass "$(cat "$dir/cached.pass")" -keypass "$(cat "$dir/cached.pass")" \
+                -dname "CN=Dot Apps"
+            fi
+            store="$dir/cached.jks"; pass="$(cat "$dir/cached.pass")"
+          fi
+          echo "::add-mask::$pass"
+          {
+            echo "DOT_SIGNING_STORE=$store"
+            echo "DOT_SIGNING_PASSWORD=$pass"
+          } >> "$GITHUB_ENV"
+
+      - name: Test engine and model parity
+        run: ./gradlew :core:engine:test --stacktrace
+
+      - name: Build Dot Screenshots
+        run: ./gradlew :app-screenshots:assembleRelease --stacktrace
+
+      - name: Collect APKs
+        run: |
+          mkdir -p dist
+          cp app-screenshots/build/outputs/apk/release/*.apk dist/DotScreenshots.apk
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apks
+          path: dist
+          retention-days: 14
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: "**/build/reports/tests/**"
+          retention-days: 7
+
+      - name: Publish rolling release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="latest-${GITHUB_REF_NAME//\//-}"
+          gh release delete "$tag" --yes --cleanup-tag || true
+          gh release create "$tag" dist/*.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Dot apps — latest build (${GITHUB_REF_NAME})" \
+            --notes "Built from ${GITHUB_SHA}. Download the APK on your phone and open it to install or update."
