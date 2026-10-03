@@ -22,8 +22,21 @@ class ClipModelParityTest {
     private val modelOut = File(System.getProperty("clip.modelOut"))
     private val fixtures = File(modelOut, "fixtures/clip_fixtures.json")
 
-    private fun session(env: OrtEnvironment, name: String): OrtSession =
-        env.createSession(File(modelOut, "assets/clip/$name").absolutePath, OrtSession.SessionOptions())
+    private fun session(env: OrtEnvironment, name: String, encoder: String): OrtSession {
+        val config = JSONObject(File(modelOut, "assets/clip/clip_config.json").readText())
+        val level = config.optJSONObject("ort_optimization")?.optString(encoder, "all") ?: "all"
+        val options = OrtSession.SessionOptions().apply {
+            setOptimizationLevel(
+                when (level) {
+                    "none" -> OrtSession.SessionOptions.OptLevel.NO_OPT
+                    "basic" -> OrtSession.SessionOptions.OptLevel.BASIC_OPT
+                    "extended" -> OrtSession.SessionOptions.OptLevel.EXTENDED_OPT
+                    else -> OrtSession.SessionOptions.OptLevel.ALL_OPT
+                },
+            )
+        }
+        return env.createSession(File(modelOut, "assets/clip/$name").absolutePath, options)
+    }
 
     private fun cosine(a: FloatArray, b: FloatArray) =
         VectorMath.dot(VectorMath.l2Normalize(a), VectorMath.l2Normalize(b))
@@ -34,7 +47,7 @@ class ClipModelParityTest {
         val root = JSONObject(fixtures.readText())
         val tokenizer = File(System.getProperty("clip.vocab")).inputStream().use { ClipTokenizer(it) }
         val env = OrtEnvironment.getEnvironment()
-        session(env, "text_encoder.onnx").use { s ->
+        session(env, "text_encoder.onnx", "text").use { s ->
             val texts = root.getJSONArray("texts")
             for (i in 0 until texts.length()) {
                 val t = texts.getJSONObject(i)
@@ -72,7 +85,7 @@ class ClipModelParityTest {
         PixelPreprocess.argbToChw(pixels, size, floatArrayOf(0f, 0f, 0f), floatArrayOf(1f, 1f, 1f), chw)
 
         val env = OrtEnvironment.getEnvironment()
-        session(env, "image_encoder.onnx").use { s ->
+        session(env, "image_encoder.onnx", "image").use { s ->
             OnnxTensor.createTensor(env, FloatBuffer.wrap(chw), longArrayOf(1, 3, size.toLong(), size.toLong())).use { input ->
                 s.run(mapOf("pixel_values" to input)).use { out ->
                     @Suppress("UNCHECKED_CAST")

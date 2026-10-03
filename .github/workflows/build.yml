@@ -62,6 +62,8 @@ jobs:
           java-version: "21"
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-cleanup: never
 
       # Release APKs must keep the same signature so updates install over the old app.
       # Preferred: repository secrets SIGNING_KEYSTORE_BASE64 + SIGNING_PASSWORD.

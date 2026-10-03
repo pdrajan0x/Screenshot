@@ -31,6 +31,9 @@ data class ClipConfig(
     val contextLength: Int,
     val logitScale: Float,
     val modelName: String,
+    /** ONNX Runtime graph optimisation level per encoder, as verified exact by the export script. */
+    val imageOptLevel: String = "all",
+    val textOptLevel: String = "all",
 ) {
     companion object {
         fun parse(json: String): ClipConfig {
@@ -44,6 +47,8 @@ data class ClipConfig(
                 contextLength = o.optInt("context_length", 77),
                 logitScale = o.optDouble("logit_scale", 100.0).toFloat(),
                 modelName = o.optString("model", "clip"),
+                imageOptLevel = o.optJSONObject("ort_optimization")?.optString("image", "all") ?: "all",
+                textOptLevel = o.optJSONObject("ort_optimization")?.optString("text", "all") ?: "all",
             )
         }
     }
@@ -70,9 +75,16 @@ class ClipModel private constructor(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>?) = size > 64
     }
 
-    private fun options() = OrtSession.SessionOptions().apply {
+    private fun options(level: String) = OrtSession.SessionOptions().apply {
         setIntraOpNumThreads(threads)
-        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        setOptimizationLevel(
+            when (level) {
+                "none" -> OrtSession.SessionOptions.OptLevel.NO_OPT
+                "basic" -> OrtSession.SessionOptions.OptLevel.BASIC_OPT
+                "extended" -> OrtSession.SessionOptions.OptLevel.EXTENDED_OPT
+                else -> OrtSession.SessionOptions.OptLevel.ALL_OPT
+            },
+        )
         // Don't busy-wait between ops: noticeably kinder to the battery, negligible latency cost.
         addConfigEntry("session.intra_op.allow_spinning", "0")
     }
@@ -86,10 +98,10 @@ class ClipModel private constructor(
     }
 
     @Synchronized
-    private fun image(): OrtSession = imageSession ?: env.createSession(mapAsset("clip/image_encoder.onnx"), options()).also { imageSession = it }
+    private fun image(): OrtSession = imageSession ?: env.createSession(mapAsset("clip/image_encoder.onnx"), options(config.imageOptLevel)).also { imageSession = it }
 
     @Synchronized
-    private fun text(): OrtSession = textSession ?: env.createSession(mapAsset("clip/text_encoder.onnx"), options()).also { textSession = it }
+    private fun text(): OrtSession = textSession ?: env.createSession(mapAsset("clip/text_encoder.onnx"), options(config.textOptLevel)).also { textSession = it }
 
     /** One L2-normalised embedding per square crop (1 for photos, up to 3 for tall screenshots). */
     fun embedImage(bitmap: Bitmap, maxCrops: Int = 3): List<FloatArray> {

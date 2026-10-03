@@ -2,6 +2,7 @@ package com.pdrajan.dot.ml
 
 import android.graphics.Bitmap
 import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.common.MlKitException
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
@@ -47,4 +48,19 @@ class TextReader(val hindi: Boolean) : Closeable {
     }
 
     override fun close() = recognizer.close()
+
+    companion object {
+        /**
+         * True when OCR failed because Play services hasn't finished downloading the model yet —
+         * a reason to retry later rather than mark the screenshot as failed.
+         */
+        fun isModelUnavailable(error: Throwable): Boolean {
+            var e: Throwable? = error
+            while (e != null) {
+                if (e is MlKitException && e.errorCode == MlKitException.UNAVAILABLE) return true
+                e = e.cause
+            }
+            return false
+        }
+    }
 }

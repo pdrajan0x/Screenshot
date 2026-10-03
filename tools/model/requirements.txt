@@ -10,4 +10,3 @@ numpy
 ftfy
 regex
 onnxscript
-onnxconverter-common

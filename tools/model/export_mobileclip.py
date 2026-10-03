@@ -197,18 +197,22 @@ def main():
     assert text_level, "text fp32 export does not match PyTorch"
 
     text_candidates = []
+    # Weight-only quantisation (activations stay fp32) first: it keeps CLIP's text geometry,
+    # whereas dynamic int8 (activations quantised too) measured ~0.95 cosine.
     quant_variants = [
-        ("int8-matmul", dict(op_types_to_quantize=["MatMul"], per_channel=False)),
-        ("int8-matmul-pc", dict(op_types_to_quantize=["MatMul"], per_channel=True)),
-        ("int8-matmul-gather-pc", dict(op_types_to_quantize=["MatMul", "Gather"], per_channel=True)),
+        ("nbits4-matmul-gather", lambda src, dst: nbits_quantize(src, dst, bits=4, ops=("MatMul", "Gather"))),
+        ("nbits8-matmul-gather", lambda src, dst: nbits_quantize(src, dst, bits=8, ops=("MatMul", "Gather"))),
+        ("nbits4-matmul", lambda src, dst: nbits_quantize(src, dst, bits=4, ops=("MatMul",))),
+        ("nbits8-matmul", lambda src, dst: nbits_quantize(src, dst, bits=8, ops=("MatMul",))),
+        ("int8-dynamic-gather", lambda src, dst: quantize_dynamic(src, dst, weight_type=QuantType.QInt8, op_types_to_quantize=["MatMul", "Gather"], per_channel=True)),
     ]
-    for name, kwargs in quant_variants:
+    for name, fn in quant_variants:
         path = os.path.join(work, f"text-{name}.onnx")
         try:
-            quantize_dynamic(text_fp32, path, weight_type=QuantType.QInt8, **kwargs)
+            fn(text_fp32, path)
             c = text_cos(path, text_level)
         except Exception as e:  # noqa: BLE001
-            print(f"text {name}: failed: {e}"[:300])
+            print(f"text {name}: failed: {type(e).__name__}: {e}"[:400])
             continue
         size = os.path.getsize(path)
         print(f"text {name}: min cos={c:.5f} size={size / 1e6:.1f} MB")
@@ -216,9 +220,9 @@ def main():
             text_candidates.append((size, name, path))
     if not text_candidates:
         try:
-            from onnxconverter_common import float16
+            from onnxruntime.transformers.float16 import convert_float_to_float16
             path = os.path.join(work, "text-fp16.onnx")
-            onnx.save(float16.convert_float_to_float16(onnx.load(text_fp32), keep_io_types=True), path)
+            onnx.save(convert_float_to_float16(onnx.load(text_fp32), keep_io_types=True), path)
             c = text_cos(path, text_level)
             print(f"text fp16: min cos={c:.5f} size={os.path.getsize(path) / 1e6:.1f} MB")
             if c >= 0.99:
@@ -257,6 +261,30 @@ def main():
     shutil.rmtree(work)
     for name in sorted(os.listdir(clip_dir)):
         print(f"{name}: {os.path.getsize(os.path.join(clip_dir, name)) / 1e6:.1f} MB")
+
+
+def nbits_quantize(src, dst, bits, ops):
+    """Blockwise weight-only quantisation (MatMulNBits / GatherBlockQuantized contrib ops)."""
+    import inspect
+    from onnxruntime.quantization import matmul_nbits_quantizer as mnq
+
+    quantizer_params = inspect.signature(mnq.MatMulNBitsQuantizer.__init__).parameters
+    kwargs = {"block_size": 32, "is_symmetric": True}
+    if "bits" in quantizer_params:
+        kwargs["bits"] = bits
+    elif bits != 4:
+        raise RuntimeError("this onnxruntime only supports 4-bit MatMulNBits")
+    if "op_types_to_quantize" in quantizer_params:
+        kwargs["op_types_to_quantize"] = tuple(ops)
+    elif "Gather" in ops:
+        raise RuntimeError("this onnxruntime can't quantise Gather")
+    if hasattr(mnq, "DefaultWeightOnlyQuantConfig") and "algo_config" in quantizer_params:
+        cfg_params = inspect.signature(mnq.DefaultWeightOnlyQuantConfig.__init__).parameters
+        cfg_kwargs = {k: v for k, v in kwargs.items() if k in cfg_params}
+        kwargs["algo_config"] = mnq.DefaultWeightOnlyQuantConfig(**cfg_kwargs)
+    quantizer = mnq.MatMulNBitsQuantizer(onnx.load(src), **kwargs)
+    quantizer.process()
+    quantizer.model.save_model_to_file(dst, use_external_data_format=False)
 
 
 LEVELS = ["all", "extended", "basic", "none"]
