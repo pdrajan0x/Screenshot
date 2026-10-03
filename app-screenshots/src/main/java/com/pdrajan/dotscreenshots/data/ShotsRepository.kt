@@ -258,7 +258,9 @@ class ShotsRepository(private val database: ShotsDatabase) {
         ensureVectors()
         if (vectorIndex.size == 0) return@withContext emptyList()
         val q = clip.embedQuery(query)
-        HybridRanker.filterVisual(vectorIndex.search(q, 150))
+        // Screens share a lot of layout, so a merely similar-looking one (a shopping list for "shoes")
+        // scores higher than an unrelated photo would: a slightly higher bar than for photos.
+        HybridRanker.filterVisual(vectorIndex.search(q, 150), floor = 0.20f)
     }
 
     suspend fun similar(id: Long, limit: Int = 12): List<Long> = withContext(Dispatchers.Default) {

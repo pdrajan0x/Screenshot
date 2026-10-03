@@ -5,7 +5,7 @@ import kotlin.math.exp
 /**
  * An automatic screenshot category. Assigned from three signals:
  * visual similarity to [prompts] (CLIP zero-shot), [keywords] in the OCR text, and the
- * source [apps] when the file name reveals it. [synonyms] let a search for "movie" pull in the
+ * source [apps] when the file name reveals it. [synonyms] let a search for "movies" pull in the
  * whole category.
  */
 data class Category(
@@ -32,7 +32,7 @@ object Categories {
                 "in stock", "size chart", "inclusive of all taxes", "cash on delivery", "ratings", "offers",
             ),
             apps = listOf("amazon", "flipkart", "myntra", "meesho", "ajio", "nykaa", "snapdeal", "blinkit", "zepto", "bigbasket", "tata cliq", "croma"),
-            synonyms = listOf("shopping", "shop", "product", "products", "buy", "order", "orders", "clothes", "shoes"),
+            synonyms = listOf("shopping", "shop"),
         ),
         Category(
             "movies", "Movies & TV",
@@ -48,14 +48,14 @@ object Categories {
                 "bookmyshow", "ott", "rotten tomatoes", "watchlist", "starring", "release date",
             ),
             apps = listOf("netflix", "prime video", "hotstar", "jiocinema", "zee5", "sonyliv", "mx player", "bookmyshow"),
-            synonyms = listOf("movie", "movies", "film", "films", "cinema", "tv", "series", "show", "shows", "ott", "netflix"),
+            synonyms = listOf("movie", "movies", "film", "films", "cinema", "tv", "series", "show", "shows"),
         ),
         Category(
             "food", "Food",
             prompts = listOf("a photo of food on a plate", "a food delivery app showing dishes", "a recipe with ingredients"),
             keywords = listOf("swiggy", "zomato", "menu", "recipe", "ingredients", "restaurant", "dine", "delivery fee", "biryani", "pizza", "add item"),
             apps = listOf("swiggy", "zomato", "domino", "eatsure", "magicpin"),
-            synonyms = listOf("food", "recipe", "recipes", "restaurant", "dish", "eat", "cooking"),
+            synonyms = listOf("food", "recipe", "recipes", "cooking"),
         ),
         Category(
             "payments", "Payments & bills",
@@ -71,14 +71,14 @@ object Categories {
                 "amount", "balance",
             ),
             apps = listOf("gpay", "google pay", "phonepe", "paytm", "bhim", "cred", "mobikwik"),
-            synonyms = listOf("payment", "payments", "paid", "bill", "bills", "receipt", "receipts", "invoice", "transaction", "upi", "bank", "money"),
+            synonyms = listOf("payment", "payments", "paid", "bill", "bills", "receipt", "receipts", "invoice", "transaction", "transactions", "upi"),
         ),
         Category(
             "chats", "Chats",
             prompts = listOf("a screenshot of a chat conversation in a messaging app", "text message bubbles in a chat"),
             keywords = listOf("typing…", "typing...", "online", "last seen", "forwarded", "message", "reply", "you deleted this message"),
             apps = listOf("whatsapp", "telegram", "messages", "signal", "messenger"),
-            synonyms = listOf("chat", "chats", "message", "messages", "conversation", "whatsapp", "text"),
+            synonyms = listOf("chat", "chats", "message", "messages", "conversation", "conversations"),
         ),
         Category(
             "travel", "Travel & tickets",
@@ -89,49 +89,49 @@ object Categories {
                 "uber", "ola", "rapido", "coach", "berth", "platform",
             ),
             apps = listOf("irctc", "makemytrip", "goibibo", "indigo", "uber", "ola", "rapido", "redbus", "cleartrip", "ixigo", "airbnb"),
-            synonyms = listOf("travel", "ticket", "tickets", "flight", "flights", "train", "hotel", "trip", "booking", "cab"),
+            synonyms = listOf("travel", "ticket", "tickets", "trip", "trips", "booking", "bookings"),
         ),
         Category(
             "events", "Events",
             prompts = listOf("an event invitation", "a calendar event", "a concert or show ticket"),
             keywords = listOf("invite", "invitation", "rsvp", "event", "venue", "save the date", "wedding", "birthday", "meeting", "webinar", "zoom", "google meet"),
             apps = listOf("calendar", "eventbrite", "meet", "zoom", "district"),
-            synonyms = listOf("event", "events", "invite", "invitation", "meeting", "wedding", "birthday", "concert"),
+            synonyms = listOf("event", "events", "invite", "invites", "invitation", "invitations"),
         ),
         Category(
             "social", "Social posts",
             prompts = listOf("a social media post with likes and comments", "an instagram post", "a tweet"),
             keywords = listOf("likes", "followers", "following", "retweet", "repost", "comments", "reel", "views", "subscribe"),
             apps = listOf("instagram", "twitter", "facebook", "threads", "snapchat", "linkedin", "reddit", "youtube", "x"),
-            synonyms = listOf("post", "posts", "social", "instagram", "tweet", "reel", "reels", "youtube"),
+            synonyms = listOf("post", "posts", "social"),
         ),
         Category(
             "music", "Music",
             prompts = listOf("a music player app showing a song", "an album cover"),
             keywords = listOf("now playing", "lyrics", "album", "playlist", "artist", "song", "spotify", "jiosaavn", "gaana"),
             apps = listOf("spotify", "jiosaavn", "gaana", "wynk", "youtube music", "apple music"),
-            synonyms = listOf("music", "song", "songs", "playlist", "lyrics", "album"),
+            synonyms = listOf("music", "song", "songs", "playlist", "playlists"),
         ),
         Category(
             "maps", "Places & maps",
             prompts = listOf("a map with directions", "a screenshot of a map app with a location pin"),
             keywords = listOf("directions", "route", "navigate", "location", "address", "pincode", "pin code", "near me"),
             apps = listOf("maps", "google maps"),
-            synonyms = listOf("map", "maps", "place", "places", "location", "address", "directions"),
+            synonyms = listOf("map", "maps", "place", "places", "location", "locations", "directions"),
         ),
         Category(
             "code", "Code & tech",
             prompts = listOf("computer code in a text editor", "a terminal window with commands", "an error message dialog"),
             keywords = listOf("error", "exception", "function", "import ", "class ", "const ", "npm ", "git ", "stack trace", "null", "undefined"),
             apps = listOf("github", "termux", "vs code"),
-            synonyms = listOf("code", "error", "errors", "programming", "bug", "terminal"),
+            synonyms = listOf("code", "programming", "terminal"),
         ),
         Category(
             "documents", "Documents & notes",
             prompts = listOf("a document page with paragraphs of text", "a scanned paper document", "handwritten notes"),
             keywords = listOf("pdf", "document", "aadhaar", "pan card", "certificate", "form", "page 1", "notes"),
             apps = listOf("drive", "docs", "adobe", "keep", "notes", "word"),
-            synonyms = listOf("document", "documents", "notes", "note", "pdf", "doc", "id", "aadhaar"),
+            synonyms = listOf("document", "documents", "notes", "note", "doc", "docs"),
         ),
         Category(
             "news", "News & articles",
@@ -166,11 +166,19 @@ object Categories {
     fun byId(id: String): Category? = byId[id]
 
     /** Category ids a search query is asking for, e.g. "movies" → `movies`. */
+    /**
+     * The categories a search asks for as a whole: only when every word names the category
+     * ("payments", "upi receipts", "my chats"). A thing inside a category ("shoes", "train",
+     * "whatsapp") is found by its text, summary, app and look instead, never by pulling in the
+     * whole category.
+     */
     fun matchQuery(query: String): List<String> {
-        val words = query.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }.toSet()
+        val words = query.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() && it !in QUERY_FILLER }
         if (words.isEmpty() || words.size > 3) return emptyList()
-        return ALL.filter { c -> c.synonyms.any { it in words } || c.label.lowercase() == query.trim().lowercase() }.map { it.id }
+        return ALL.filter { c -> words.all { it in c.synonyms } || c.label.lowercase() == query.trim().lowercase() }.map { it.id }
     }
+
+    private val QUERY_FILLER = setOf("my", "the", "a", "an", "all", "of", "and", "in", "from", "screenshot", "screenshots")
 }
 
 /**

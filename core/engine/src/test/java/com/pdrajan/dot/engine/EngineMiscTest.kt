@@ -107,7 +107,14 @@ class SearchTest {
     fun categoryIntent() {
         assertEquals(listOf("movies"), Categories.matchQuery("movies"))
         assertEquals(listOf("payments"), Categories.matchQuery("upi receipt"))
+        assertEquals(listOf("chats"), Categories.matchQuery("my chats"))
+        assertEquals(listOf("shopping"), Categories.matchQuery("Shopping"))
         assertTrue(Categories.matchQuery("blue car parked near a mountain at sunset").isEmpty())
+        // Things inside a category don't pull in the whole category (a cough syrup page for "shoes").
+        assertTrue(Categories.matchQuery("shoes").isEmpty())
+        assertTrue(Categories.matchQuery("red shoes").isEmpty())
+        assertTrue(Categories.matchQuery("shopping shoes").isEmpty())
+        assertTrue(Categories.matchQuery("whatsapp").isEmpty())
     }
 
     @Test
