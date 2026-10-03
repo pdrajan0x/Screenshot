@@ -11,8 +11,10 @@ Outputs, under --out (default: model-out/):
 MobileCLIP2 weights: Apple Machine Learning Research Model License (research / non-commercial).
 """
 import argparse
+import copy
 import json
 import os
+import shutil
 
 import numpy as np
 import onnx
@@ -90,9 +92,10 @@ def main():
     torch.manual_seed(0)
     # nn.MultiheadAttention's inference fast path (aten::_native_multi_head_attention) has no ONNX export.
     torch.backends.mha.set_fastpath_enabled(False)
-    model, _, _ = open_clip.create_model_and_transforms(MODEL, pretrained=PRETRAINED)
+    raw_model, _, _ = open_clip.create_model_and_transforms(MODEL, pretrained=PRETRAINED)
+    raw_model.eval()
+    model = reparameterize(copy.deepcopy(raw_model))
     model.eval()
-    model = reparameterize(model)
     tokenizer = open_clip.get_tokenizer(MODEL)
     assert type(tokenizer).__name__ == "SimpleTokenizer", f"unexpected tokenizer {type(tokenizer)}"
 
@@ -115,59 +118,128 @@ def main():
         config["embed_dim"] = int(ImageEncoder(model)(torch.zeros(1, 3, config["image_size"], config["image_size"])).shape[-1])
     print("config:", config)
 
-    image_fp32 = os.path.join(clip_dir, "image_encoder.onnx")
-    text_fp32 = os.path.join(args.out, "text_encoder_fp32.onnx")
-    text_int8 = os.path.join(clip_dir, "text_encoder.onnx")
+    img = synthetic_image(config["image_size"])
+    example_image = torch.from_numpy(img)[None]
+    tokens = tokenizer(PARITY_TEXTS)
+    with torch.no_grad():
+        torch_img = ImageEncoder(model)(example_image).numpy()[0]
+        torch_img_raw = ImageEncoder(raw_model)(example_image).numpy()[0]
+        torch_txt = TextEncoder(model)(tokens).numpy()
+        traced = torch.jit.trace(ImageEncoder(model), example_image)
+        traced_img = traced(example_image).numpy()[0]
+    print(f"diag: reparam vs original torch cos={cosine(torch_img, torch_img_raw):.6f}")
+    print(f"diag: jit.trace vs eager cos={cosine(torch_img, traced_img):.6f}")
 
-    dummy_image = torch.zeros(1, 3, config["image_size"], config["image_size"])
-    dummy_text = tokenizer(["a photo of a dog"])
+    work = os.path.join(args.out, "work")
+    os.makedirs(work, exist_ok=True)
 
+    # ---- Image encoder: try export variants x ORT optimisation levels, keep the first exact one ----
+    image_variants = [
+        ("reparam-fold", model, dict(do_constant_folding=True, dynamo=False)),
+        ("reparam-nofold", model, dict(do_constant_folding=False, dynamo=False)),
+        ("original-fold", raw_model, dict(do_constant_folding=True, dynamo=False)),
+        ("reparam-dynamo", model, dict(dynamo=True)),
+    ]
+    chosen_image = None
+    for name, m, kwargs in image_variants:
+        path = os.path.join(work, f"image-{name}.onnx")
+        try:
+            with torch.no_grad():
+                export_kwargs = dict(input_names=["pixel_values"], output_names=["embedding"], opset_version=17, **kwargs)
+                if kwargs.get("dynamo"):
+                    export_kwargs["dynamic_shapes"] = {"pixel_values": {0: torch.export.Dim("batch", min=1, max=8)}}
+                    export_kwargs["opset_version"] = 18
+                else:
+                    export_kwargs["dynamic_axes"] = {"pixel_values": {0: "batch"}, "embedding": {0: "batch"}}
+                torch.onnx.export(ImageEncoder(m), example_image, path, **export_kwargs)
+        except Exception as e:  # noqa: BLE001
+            print(f"image {name}: export failed: {type(e).__name__}: {e}"[:400])
+            continue
+        reference = torch_img if m is model else torch_img_raw
+        for level in LEVELS:
+            try:
+                out = ort_run(path, {"pixel_values": img[None]}, level)[0]
+                c = cosine(reference, out)
+            except Exception as e:  # noqa: BLE001
+                print(f"image {name} @ {level}: run failed: {e}"[:300])
+                continue
+            print(f"image {name} @ {level}: cos={c:.6f}")
+            if c > 0.999 and chosen_image is None:
+                chosen_image = (name, path, level)
+        if chosen_image:
+            break
+    assert chosen_image, "no image export variant matched PyTorch"
+    print("chosen image variant:", chosen_image)
+    image_out = os.path.join(clip_dir, "image_encoder.onnx")
+    shutil.copy(chosen_image[1], image_out)
+
+    # ---- Text encoder: fp32 export, then the smallest quantisation that stays faithful ----
+    text_fp32 = os.path.join(work, "text-fp32.onnx")
     with torch.no_grad():
         torch.onnx.export(
-            ImageEncoder(model), dummy_image, image_fp32,
-            input_names=["pixel_values"], output_names=["embedding"],
-            dynamic_axes={"pixel_values": {0: "batch"}, "embedding": {0: "batch"}},
-            opset_version=17, do_constant_folding=True, dynamo=False,
-        )
-        torch.onnx.export(
-            TextEncoder(model), dummy_text, text_fp32,
+            TextEncoder(model), tokens, text_fp32,
             input_names=["input_ids"], output_names=["embedding"],
             dynamic_axes={"input_ids": {0: "batch"}, "embedding": {0: "batch"}},
             opset_version=17, do_constant_folding=True, dynamo=False,
         )
-    onnx.checker.check_model(image_fp32)
-    onnx.checker.check_model(text_fp32)
+    feeds = {"input_ids": tokens.numpy().astype(np.int64)}
 
-    quantize_dynamic(
-        text_fp32, text_int8,
-        weight_type=QuantType.QInt8,
-        op_types_to_quantize=["MatMul", "Gather"],
-    )
+    def text_cos(path, level):
+        out = ort_run(path, feeds, level)
+        return min(cosine(a, b) for a, b in zip(torch_txt, out))
 
-    # ---- Parity: PyTorch vs ONNX, and reference outputs for the Kotlin test ----
-    img = synthetic_image(config["image_size"])
-    tokens = tokenizer(PARITY_TEXTS)
-    with torch.no_grad():
-        torch_img = ImageEncoder(model)(torch.from_numpy(img)[None]).numpy()[0]
-        torch_txt = TextEncoder(model)(tokens).numpy()
+    text_level = None
+    for level in LEVELS:
+        c = text_cos(text_fp32, level)
+        print(f"text fp32 @ {level}: min cos={c:.6f}")
+        if c > 0.999 and text_level is None:
+            text_level = level
+    assert text_level, "text fp32 export does not match PyTorch"
 
-    so = ort.SessionOptions()
-    img_sess = ort.InferenceSession(image_fp32, so, providers=["CPUExecutionProvider"])
-    txt_sess = ort.InferenceSession(text_int8, so, providers=["CPUExecutionProvider"])
-    onnx_img = img_sess.run(None, {"pixel_values": img[None]})[0][0]
-    onnx_txt = txt_sess.run(None, {"input_ids": tokens.numpy().astype(np.int64)})[0]
+    text_candidates = []
+    quant_variants = [
+        ("int8-matmul", dict(op_types_to_quantize=["MatMul"], per_channel=False)),
+        ("int8-matmul-pc", dict(op_types_to_quantize=["MatMul"], per_channel=True)),
+        ("int8-matmul-gather-pc", dict(op_types_to_quantize=["MatMul", "Gather"], per_channel=True)),
+    ]
+    for name, kwargs in quant_variants:
+        path = os.path.join(work, f"text-{name}.onnx")
+        try:
+            quantize_dynamic(text_fp32, path, weight_type=QuantType.QInt8, **kwargs)
+            c = text_cos(path, text_level)
+        except Exception as e:  # noqa: BLE001
+            print(f"text {name}: failed: {e}"[:300])
+            continue
+        size = os.path.getsize(path)
+        print(f"text {name}: min cos={c:.5f} size={size / 1e6:.1f} MB")
+        if c >= 0.99:
+            text_candidates.append((size, name, path))
+    if not text_candidates:
+        try:
+            from onnxconverter_common import float16
+            path = os.path.join(work, "text-fp16.onnx")
+            onnx.save(float16.convert_float_to_float16(onnx.load(text_fp32), keep_io_types=True), path)
+            c = text_cos(path, text_level)
+            print(f"text fp16: min cos={c:.5f} size={os.path.getsize(path) / 1e6:.1f} MB")
+            if c >= 0.99:
+                text_candidates.append((os.path.getsize(path), "fp16", path))
+        except Exception as e:  # noqa: BLE001
+            print(f"text fp16: failed: {e}"[:300])
+    if not text_candidates:
+        text_candidates.append((os.path.getsize(text_fp32), "fp32", text_fp32))
+    text_candidates.sort()
+    _, text_name, text_path = text_candidates[0]
+    print("chosen text variant:", text_name)
+    text_out = os.path.join(clip_dir, "text_encoder.onnx")
+    shutil.copy(text_path, text_out)
 
-    img_cos = cosine(torch_img, onnx_img)
-    txt_cos = [cosine(a, b) for a, b in zip(torch_txt, onnx_txt)]
-    print(f"image fp32 parity cos={img_cos:.6f}")
-    print("text int8 parity cos=", ["%.4f" % c for c in txt_cos])
-    assert img_cos > 0.999, img_cos
-    assert min(txt_cos) > 0.98, txt_cos
+    config["ort_optimization"] = {"image": chosen_image[2], "text": text_level}
+    config["variants"] = {"image": chosen_image[0], "text": text_name}
 
-    # Zero-shot sanity on the synthetic pattern is meaningless; check text geometry instead:
-    # related prompts should be closer than unrelated ones.
-    sim = onnx_txt @ onnx_txt.T
-    print("text sim matrix:\n", np.round(sim, 3))
+    # ---- Reference outputs for the Kotlin parity test (same files + levels the app uses) ----
+    onnx_img = ort_run(image_out, {"pixel_values": img[None]}, chosen_image[2])[0]
+    onnx_txt = ort_run(text_out, feeds, text_level)
+    print("text sim matrix:\n", np.round(onnx_txt @ onnx_txt.T, 3))
 
     fixtures = {
         "image_size": config["image_size"],
@@ -182,9 +254,24 @@ def main():
     with open(os.path.join(clip_dir, "clip_config.json"), "w") as f:
         json.dump(config, f, indent=2)
 
-    os.remove(text_fp32)
-    for name in os.listdir(clip_dir):
+    shutil.rmtree(work)
+    for name in sorted(os.listdir(clip_dir)):
         print(f"{name}: {os.path.getsize(os.path.join(clip_dir, name)) / 1e6:.1f} MB")
+
+
+LEVELS = ["all", "extended", "basic", "none"]
+
+
+def ort_run(path, feeds, level):
+    so = ort.SessionOptions()
+    so.graph_optimization_level = {
+        "all": ort.GraphOptimizationLevel.ORT_ENABLE_ALL,
+        "extended": ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+        "basic": ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
+        "none": ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
+    }[level]
+    sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
+    return sess.run(None, feeds)[0]
 
 
 if __name__ == "__main__":

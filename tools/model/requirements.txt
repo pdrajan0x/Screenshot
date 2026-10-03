@@ -9,3 +9,5 @@ onnxruntime>=1.20
 numpy
 ftfy
 regex
+onnxscript
+onnxconverter-common
