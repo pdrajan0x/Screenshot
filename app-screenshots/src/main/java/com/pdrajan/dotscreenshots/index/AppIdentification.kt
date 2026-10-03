@@ -90,12 +90,12 @@ class AppIdentification(
 
     /** Installed apps, the home screen, and well-known apps that may have been installed before. */
     private fun candidates(): List<AppCandidate> {
-        val installed = installedApps()
+        val apps = installedApps()
         val out = ArrayList<AppCandidate>()
-        val launcher = this.installed.launchers.firstOrNull()
+        val launcher = installed.launchers.firstOrNull()
         out += AppCandidate(AppPrompts.HOME_SCREEN, launcher, AppPrompts.forApp(AppPrompts.HOME_SCREEN, launcher, isLauncher = true))
-        installed.forEach { out += AppCandidate(it.label, it.packageName, AppPrompts.forApp(it.label, it.packageName)) }
-        val covered = installed.mapNotNull { AppRecognizer.canonical(it.label) }.toSet()
+        apps.forEach { out += AppCandidate(it.label, it.packageName, AppPrompts.forApp(it.label, it.packageName)) }
+        val covered = apps.mapNotNull { AppRecognizer.canonical(it.label) }.toSet()
         (AppRecognizer.TEXT_APPS + AppRecognizer.VISUAL.keys.filterNot { it.startsWith("~") })
             .distinct()
             .filter { it !in covered }
@@ -112,10 +112,10 @@ class AppIdentification(
 
     /** Apps to choose from when correcting a screenshot: the library's apps first, then installed ones. */
     suspend fun choices(): List<AppChoice> = withContext(Dispatchers.IO) {
-        val installed = installedApps()
-        val byLabel = installed.associateBy { it.label }
+        val apps = installedApps()
+        val byLabel = apps.associateBy { it.label }
         val inLibrary = repo.appLabels().map { (label, _) -> byLabel[label] ?: AppChoice(label, null) }
-        (inLibrary + AppChoice(AppPrompts.HOME_SCREEN, this.installed.launchers.firstOrNull()) + installed)
+        (inLibrary + AppChoice(AppPrompts.HOME_SCREEN, installed.launchers.firstOrNull()) + apps)
             .distinctBy { it.label.lowercase() }
     }
 
