@@ -122,6 +122,8 @@ fun ModelSetupScreen(
     onPause: () -> Unit,
     /** Android 11+: reuse a copy the other Dot app downloaded (needs All files access); null to hide. */
     onUseOtherAppsCopy: (() -> Unit)?,
+    /** The other Dot app's copy is already there; only access is missing. */
+    othersCopyFound: Boolean = false,
 ) {
     Column(
         Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -159,6 +161,25 @@ fun ModelSetupScreen(
                 }
             }
             ui.verifying -> Text("Checking the download…", style = MaterialTheme.typography.titleMedium)
+            othersCopyFound && onUseOtherAppsCopy != null -> {
+                Text(
+                    "The other Dot app already downloaded it. Allow “All files access” on the next screen so $appName can use the same copy: nothing to download.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                DotPrimaryButton(
+                    "Use that copy",
+                    onClick = onUseOtherAppsCopy,
+                    icon = Icons.Rounded.FolderOpen,
+                    accent = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                DotOutlinedButton(
+                    "Download a separate copy (${mb(ui.total)})",
+                    onClick = onDownload,
+                    icon = Icons.Rounded.Download,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             else -> {
                 ui.error?.let {
                     Text(

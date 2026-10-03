@@ -34,6 +34,9 @@ class ModelBundle(context: Context, val label: String, specs: List<ModelSpec>) {
 
     fun refresh() = parts.forEach { it.refresh() }
 
+    /** The other Dot app already downloaded it; this app just needs "All files access" to use that copy. */
+    fun othersCopyLocked(): Boolean = parts.any { it.othersCopyLocked() }
+
     /** Bytes already on the phone: finished files plus interrupted downloads that will resume. */
     fun downloadedBytes(): Long = parts.sumOf { if (it.isReady()) it.spec.sizeBytes else it.partialBytes() }
 

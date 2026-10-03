@@ -37,8 +37,12 @@ fun ModelGate(c: GalleryContainer) {
     val ctx = LocalContext.current
     val model = c.describerModel
     val state by remember { model.state }.collectAsStateWithLifecycle(model.currentState())
+    var othersCopy by remember { mutableStateOf(model.othersCopyLocked()) }
     // Back from "All files access" (or the Files app): look for the other app's copy again.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.refresh() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        model.refresh()
+        othersCopy = model.othersCopyLocked()
+    }
     ModelSetupScreen(
         appName = "Dot Gallery",
         modelName = model.label,
@@ -57,6 +61,7 @@ fun ModelGate(c: GalleryContainer) {
         } else {
             null
         },
+        othersCopyFound = othersCopy,
     )
 }
 

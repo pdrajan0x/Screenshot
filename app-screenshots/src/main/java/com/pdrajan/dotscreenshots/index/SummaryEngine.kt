@@ -46,6 +46,8 @@ class SummaryEngine(
     @Volatile private var engine: LlamaEngine? = null
     private var releaseJob: Job? = null
     private var lastBlocker: String? = null
+    /** When loading the model last failed: background work waits a while before trying again. */
+    @Volatile private var loadFailedAt = 0L
 
     private val _progress = MutableStateFlow(IndexProgress())
     val progress: StateFlow<IndexProgress> = _progress.asStateFlow()
@@ -96,8 +98,10 @@ class SummaryEngine(
         val started = System.currentTimeMillis()
         _progress.value = IndexProgress(running = true, total = jobs.size, preparing = engine == null)
         try {
+            if (engine == null && !userAsked && System.currentTimeMillis() - loadFailedAt < RETRY_LOAD_MILLIS) return 0
             val vlm = engine ?: withContext(Dispatchers.IO) { load() }?.also { engine = it }
             if (vlm == null) {
+                loadFailedAt = System.currentTimeMillis()
                 DotLog.e("summary: model could not be loaded")
                 _error.value = "The AI model couldn't start"
                 // Deleted from the Files app: show the download again.
@@ -195,3 +199,6 @@ class SummaryEngine(
         }
     }
 }
+
+/** After a failed model load, background work tries again this much later ("Do it now" tries right away). */
+private const val RETRY_LOAD_MILLIS = 15 * 60_000L

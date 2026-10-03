@@ -166,7 +166,15 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
         return candidates.firstOrNull { complete(it) }
     }
 
-    private fun complete(f: File) = runCatching { f.isFile && f.length() == spec.sizeBytes }.getOrDefault(false)
+    /** The whole file is there and this app may open it (seeing another app's copy isn't enough). */
+    private fun complete(f: File) = runCatching { f.isFile && f.length() == spec.sizeBytes && LlamaEngine.readable(f) }.getOrDefault(false)
+
+    /**
+     * The other Dot app's copy is in Download/AI Models, but this app may not open it yet: it needs
+     * "All files access" (then nothing is downloaded twice).
+     */
+    fun othersCopyLocked(): Boolean = current == null && sharedDir != null &&
+        runCatching { File(sharedDir, spec.fileName).let { it.isFile && it.length() == spec.sizeBytes && !LlamaEngine.readable(it) } }.getOrDefault(false)
 
     /** The folder new downloads go to: the shared one when it can be created. */
     private fun downloadDir(): File {
@@ -177,7 +185,8 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
     private fun partIn(dir: File) = File(dir, spec.fileName + ".part")
 
     /** The interrupted download to resume, wherever it was started. */
-    private fun existingPart(): File? = listOfNotNull(sharedDir, privateDir).map(::partIn).firstOrNull { it.isFile && it.length() > 0 }
+    private fun existingPart(): File? = listOfNotNull(sharedDir, privateDir).map(::partIn)
+        .firstOrNull { runCatching { it.isFile && it.length() > 0 && it.canWrite() }.getOrDefault(false) }
 
     /** Bytes of an interrupted download that will be resumed. */
     fun partialBytes(): Long = existingPart()?.length() ?: 0L

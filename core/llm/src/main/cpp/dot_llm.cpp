@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -39,8 +40,21 @@ struct Engine {
     std::string last_error;
 };
 
+// Recent warnings and errors from llama.cpp and the vision projector, so the app's own log (what
+// the user can see and share) says why loading failed, not just that it did.
+std::mutex log_mutex;
+std::string recent_log;
+
+void remember(const char *text) {
+    std::lock_guard<std::mutex> lock(log_mutex);
+    recent_log += text;
+    if (!recent_log.empty() && recent_log.back() != '\n') recent_log += '\n';
+    if (recent_log.size() > 4000) recent_log.erase(0, recent_log.size() - 4000);
+}
+
 void log_callback(ggml_log_level level, const char *text, void *) {
     if (level == GGML_LOG_LEVEL_ERROR) LOGE("%s", text);
+    if (level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_WARN) remember(text);
 }
 
 std::string to_string(JNIEnv *env, jbyteArray bytes) {
@@ -116,6 +130,7 @@ extern "C" {
 JNIEXPORT void JNICALL
 Java_com_pdrajan_dot_llm_LlamaNative_nativeInit(JNIEnv *env, jclass, jstring backend_dir) {
     llama_log_set(log_callback, nullptr);
+    mtmd_helper_log_set(log_callback, nullptr);
     if (backend_dir != nullptr) {
         const char *dir = env->GetStringUTFChars(backend_dir, nullptr);
         // CPU backend variants (armv8.0 … armv9.2) live next to this library; the best one for
@@ -131,15 +146,28 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeSystemInfo(JNIEnv *env, jclass) {
     return env->NewStringUTF(llama_print_system_info());
 }
 
-// Loads the text half of the model from [jpath]; [n_ctx] tokens of context.
+// Loads the text half of the model from [jpath]; [n_ctx] tokens of context. If the usual way fails,
+// tries safer ones: reading the file into memory instead of mapping it, then without the repacked
+// (KleidiAI / ARM) weight layouts.
 JNIEXPORT jlong JNICALL
 Java_com_pdrajan_dot_llm_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpath, jint n_ctx, jint n_threads) {
     llama_model_params mparams = llama_model_default_params();
     const char *path = env->GetStringUTFChars(jpath, nullptr);
     llama_model *model = llama_model_load_from_file(path, mparams);
+    if (model == nullptr) {
+        remember("dotllm: load failed; retrying without memory-mapping");
+        mparams.load_mode = LLAMA_LOAD_MODE_NONE;
+        model = llama_model_load_from_file(path, mparams);
+    }
+    if (model == nullptr) {
+        remember("dotllm: load failed; retrying without repacked weights");
+        mparams.use_extra_bufts = false;
+        model = llama_model_load_from_file(path, mparams);
+    }
     env->ReleaseStringUTFChars(jpath, path);
     if (model == nullptr) {
         LOGE("model load failed");
+        remember("dotllm: model load failed");
         return 0;
     }
     llama_context_params cparams = llama_context_default_params();
@@ -152,6 +180,7 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpa
     llama_context *ctx = llama_init_from_model(model, cparams);
     if (ctx == nullptr) {
         LOGE("context init failed");
+        remember("dotllm: context init failed");
         llama_model_free(model);
         return 0;
     }
@@ -170,6 +199,7 @@ JNIEXPORT jboolean JNICALL
 Java_com_pdrajan_dot_llm_LlamaNative_nativeLoadVision(JNIEnv *env, jclass, jlong handle, jstring jpath, jint n_threads,
                                                        jint max_image_tokens) {
     auto *engine = reinterpret_cast<Engine *>(handle);
+    if (engine == nullptr) return JNI_FALSE;
     if (engine->vision != nullptr) return JNI_TRUE;
     mtmd_context_params params = mtmd_context_params_default();
     params.use_gpu = false;
@@ -182,6 +212,7 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeLoadVision(JNIEnv *env, jclass, jlong
     env->ReleaseStringUTFChars(jpath, path);
     if (engine->vision == nullptr || !mtmd_support_vision(engine->vision)) {
         LOGE("vision projector load failed");
+        remember("dotllm: vision projector load failed");
         if (engine->vision != nullptr) mtmd_free(engine->vision);
         engine->vision = nullptr;
         return JNI_FALSE;
@@ -251,6 +282,21 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeDescribe(JNIEnv *env, jclass, jlong h
     mtmd_input_chunks_free(chunks);
     mtmd_bitmap_free(bitmap);
     return result;
+}
+
+// Returns and clears the recent warnings and errors (see remember).
+JNIEXPORT jstring JNICALL
+Java_com_pdrajan_dot_llm_LlamaNative_nativeTakeLog(JNIEnv *env, jclass) {
+    std::string out;
+    {
+        std::lock_guard<std::mutex> lock(log_mutex);
+        out.swap(recent_log);
+    }
+    // NewStringUTF wants (modified) UTF-8; keep it to plain ASCII so odd bytes can't trip it.
+    for (char &ch : out) {
+        if (static_cast<unsigned char>(ch) >= 0x80) ch = '?';
+    }
+    return env->NewStringUTF(out.c_str());
 }
 
 JNIEXPORT jstring JNICALL

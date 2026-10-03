@@ -41,6 +41,8 @@ class PhotoDescriber(
     @Volatile private var engine: LlamaEngine? = null
     private var releaseJob: Job? = null
     private var lastBlocker: String? = null
+    /** When loading the model last failed: background work waits a while before trying again. */
+    @Volatile private var loadFailedAt = 0L
 
     /** (done, total) while describing, for the status strip; null when idle. */
     private val _progress = MutableStateFlow<Pair<Int, Int>?>(null)
@@ -87,8 +89,10 @@ class PhotoDescriber(
         val started = System.currentTimeMillis()
         _progress.value = 0 to jobs.size
         try {
+            if (engine == null && !userAsked && System.currentTimeMillis() - loadFailedAt < RETRY_LOAD_MILLIS) return 0
             val vlm = engine ?: withContext(Dispatchers.IO) { load() }?.also { engine = it }
             if (vlm == null) {
+                loadFailedAt = System.currentTimeMillis()
                 DotLog.e("describe: model could not be loaded")
                 _error.value = "The AI model couldn't start"
                 model.refresh()
@@ -166,3 +170,6 @@ class PhotoDescriber(
         }
     }
 }
+
+/** After a failed model load, background work tries again this much later ("Do it now" tries right away). */
+private const val RETRY_LOAD_MILLIS = 15 * 60_000L

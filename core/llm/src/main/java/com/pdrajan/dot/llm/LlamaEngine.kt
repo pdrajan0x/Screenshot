@@ -23,6 +23,8 @@ object LlamaNative {
         maxTokens: Int,
     ): ByteArray?
     @JvmStatic external fun nativeLastError(handle: Long): String
+    /** Recent llama.cpp warnings and errors (cleared by reading). */
+    @JvmStatic external fun nativeTakeLog(): String
     @JvmStatic external fun nativeCancel(handle: Long)
     @JvmStatic external fun nativeFree(handle: Long)
 }
@@ -41,7 +43,10 @@ class LlamaEngine private constructor(handle: Long) : Closeable {
     /** Lets [describe] see images: loads a vision model's projector file. */
     fun loadVision(mmproj: File, threads: Int = defaultThreads(), maxImageTokens: Int = 0): Boolean = synchronized(lock) {
         val h = handle
-        h != 0L && LlamaNative.nativeLoadVision(h, mmproj.absolutePath, threads, maxImageTokens)
+        val ok = h != 0L && readable(mmproj) && LlamaNative.nativeLoadVision(h, mmproj.absolutePath, threads, maxImageTokens)
+        val notes = LlamaNative.nativeTakeLog().trim()
+        if (!ok) DotLog.e("llm: failed to load ${mmproj.name}" + if (notes.isNotEmpty()) ":\n$notes" else "")
+        ok
     }
 
     /**
@@ -92,14 +97,23 @@ class LlamaEngine private constructor(handle: Long) : Closeable {
         fun load(context: Context, model: File, contextTokens: Int = 2048, threads: Int = defaultThreads()): LlamaEngine? {
             if (!init(context) || !model.exists()) return null
             val started = System.currentTimeMillis()
-            val h = LlamaNative.nativeLoad(model.absolutePath, contextTokens, threads)
-            if (h == 0L) {
-                DotLog.e("llm: failed to load ${model.name}")
+            if (!readable(model)) {
+                DotLog.e("llm: can't read ${model.path} (another app's copy needs All files access)")
                 return null
             }
+            val h = LlamaNative.nativeLoad(model.absolutePath, contextTokens, threads)
+            val notes = LlamaNative.nativeTakeLog().trim()
+            if (h == 0L) {
+                DotLog.e("llm: failed to load ${model.name} (${model.length() / 1_000_000} MB)" + if (notes.isNotEmpty()) ":\n$notes" else "")
+                return null
+            }
+            if (notes.isNotEmpty()) DotLog.w("llm: ${model.name} loaded with warnings:\n$notes")
             DotLog.i("llm: loaded ${model.name} with $threads threads in ${System.currentTimeMillis() - started} ms")
             return LlamaEngine(h)
         }
+
+        /** The file can really be opened (not just seen): another app's copy needs All files access. */
+        fun readable(file: File): Boolean = runCatching { file.inputStream().use { it.read() >= 0 } }.getOrDefault(false)
 
         /**
          * One thread per fast core (prime + big), at most 4. Many budget phones have only two fast
