@@ -89,7 +89,7 @@ import androidx.lifecycle.viewModelScope
 import com.pdrajan.dot.design.DateLabels
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotOutlinedButton
-import com.pdrajan.dot.design.DotTag
+import com.pdrajan.dot.design.KeywordChips
 import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.engine.Categories
@@ -180,6 +180,7 @@ fun DetailScreen(
     onBack: () -> Unit,
     onOpenShot: (Long) -> Unit,
     onOpenCollection: (Long) -> Unit,
+    onSearch: (String) -> Unit,
 ) {
     val vm = containerViewModel(key = "detail-$initialId-$context") { DetailViewModel(it, initialId, context) }
     val ids by vm.ids.collectAsStateWithLifecycle()
@@ -224,6 +225,7 @@ fun DetailScreen(
                         onDetailsShown = { detailsShown = it },
                         onOpenShot = onOpenShot,
                         onOpenCollection = onOpenCollection,
+                        onSearch = onSearch,
                     )
                 }
             }
@@ -351,6 +353,7 @@ private fun ShotPage(
     onDetailsShown: (Boolean) -> Unit,
     onOpenShot: (Long) -> Unit,
     onOpenCollection: (Long) -> Unit,
+    onSearch: (String) -> Unit,
 ) {
     val detail by remember(id) { vm.detailOf(id) }.collectAsStateWithLifecycle(null)
     val scroll = rememberScrollState()
@@ -383,7 +386,7 @@ private fun ShotPage(
             ) {
                 val d = detail
                 if (d != null) {
-                    DetailSheet(d, vm, onOpenShot = onOpenShot, onOpenCollection = onOpenCollection)
+                    DetailSheet(d, vm, onOpenShot = onOpenShot, onOpenCollection = onOpenCollection, onSearch = onSearch)
                 } else {
                     Spacer(Modifier.fillMaxWidth().height(160.dp))
                 }
@@ -405,7 +408,7 @@ private fun ViewerAction(icon: androidx.compose.ui.graphics.vector.ImageVector, 
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -> Unit, onOpenCollection: (Long) -> Unit) {
+private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -> Unit, onOpenCollection: (Long) -> Unit, onSearch: (String) -> Unit) {
     val ctx = LocalContext.current
     val collections by vm.collections.collectAsStateWithLifecycle()
     val similar by vm.similar.collectAsStateWithLifecycle()
@@ -454,9 +457,7 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
             }
             if (d.tags.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    d.tags.take(10).forEach { DotTag(it) }
-                }
+                KeywordChips(d.tags, onClick = onSearch)
             }
         }
         Spacer(Modifier.height(8.dp))

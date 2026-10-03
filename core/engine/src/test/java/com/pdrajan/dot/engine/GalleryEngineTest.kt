@@ -86,17 +86,40 @@ class ImageQualityTest {
         }
         for (window in listOf(Long.MAX_VALUE, 5_000L)) {
             val sorted = items.sortedBy { it.takenAt }
-            val parent = IntArray(sorted.size) { it }
-            fun find(i: Int): Int = if (parent[i] == i) i else find(parent[i]).also { parent[i] = it }
+            val near = Array(sorted.size) { HashSet<Int>() }
             for (i in sorted.indices) for (j in i + 1 until sorted.size) {
                 if (sorted[j].takenAt - sorted[i].takenAt <= window && ImageQuality.hamming(sorted[i].hash, sorted[j].hash) <= 5) {
-                    parent[find(j)] = find(i)
+                    near[i] += j
+                    near[j] += i
                 }
             }
-            val expected = sorted.indices.groupBy { find(it) }.values.filter { it.size > 1 }.map { g -> g.map { sorted[it].id }.toSet() }.toSet()
-            val actual = ImageQuality.duplicateGroups(items, maxDistance = 5, windowMillis = window).map { g -> g.map { it.id }.toSet() }.toSet()
+            val expected = ImageQuality.clusterAroundBest(sorted, near).map { g -> g.map { it.id } }
+            val actual = ImageQuality.duplicateGroups(items, maxDistance = 5, windowMillis = window).map { g -> g.map { it.id } }
             assertEquals(expected, actual)
         }
+    }
+
+    @Test
+    fun duplicatesNeverChainAndKeepTheBest() {
+        // 1 ~ 2 ~ 3 (one bit apart each), but 1 and 3 are two bits apart: with maxDistance 1 only
+        // copies of the kept photo are grouped.
+        val items = listOf(
+            ImageQuality.Candidate(1, 0b000L, 1_000, pixels = 100, sizeBytes = 10),
+            ImageQuality.Candidate(2, 0b001L, 2_000, pixels = 200, sizeBytes = 10),
+            ImageQuality.Candidate(3, 0b011L, 3_000, pixels = 100, sizeBytes = 10),
+        )
+        val groups = ImageQuality.duplicateGroups(items, maxDistance = 1)
+        assertEquals(listOf(listOf(2L, 1L, 3L)), groups.map { g -> g.map { it.id } })
+        // A sharper burst frame beats a blurrier one of the same size; a favourite beats both.
+        val burst = listOf(
+            ImageQuality.Candidate(1, 0L, 1_000, pixels = 100, sizeBytes = 20, sharpness = 10.0),
+            ImageQuality.Candidate(2, 0L, 1_100, pixels = 100, sizeBytes = 10, sharpness = 90.0),
+        )
+        assertEquals(2L, ImageQuality.duplicateGroups(burst).single().first().id)
+        val fav = burst + ImageQuality.Candidate(3, 0L, 1_200, pixels = 100, sizeBytes = 5, favorite = true)
+        assertEquals(3L, ImageQuality.duplicateGroups(fav).single().first().id)
+        // The look-alike check can veto a hash match.
+        assertTrue(ImageQuality.duplicateGroups(burst, same = { _, _ -> false }).isEmpty())
     }
 
     @Test

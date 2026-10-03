@@ -127,9 +127,12 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
         publish(q, HybridRanker.merge(text.ids, emptyList(), categoryIds, text.noteIds), visualPending = c.hub.available)
 
         if (!c.hub.available) return
+        // Look-alike matching only fills in for screenshots the AI hasn't summarised yet; the rest are
+        // found by what was written about them, so "shoes" doesn't bring up every shopping page.
         val visual: List<VectorHit> = runCatching {
             val clip = c.hub.clip() ?: return@runCatching emptyList()
-            c.repo.visualSearch(q, clip)
+            val summarized = c.repo.summarizedIds()
+            c.repo.visualSearch(q, clip) { it !in summarized }
         }.getOrDefault(emptyList())
         publish(q, HybridRanker.merge(text.ids, visual, categoryIds, text.noteIds), visualPending = false)
     }
@@ -152,15 +155,21 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit) {
-    val vm = containerViewModel { SearchViewModel(it) }
+fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: String = "") {
+    val vm = containerViewModel(key = "search-$initialQuery") { SearchViewModel(it) }
     val ui by vm.ui.collectAsStateWithLifecycle()
     val recent by vm.recent.collectAsStateWithLifecycle()
     val categoryCounts by vm.categoryCounts.collectAsStateWithLifecycle()
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(Unit) {
+        if (initialQuery.isNotBlank()) {
+            if (ui.query.isBlank()) vm.onQueryChange(initialQuery)
+        } else {
+            runCatching { focus.requestFocus() }
+        }
+    }
 
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -278,7 +287,6 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit) {
                                     vm.submit()
                                     onOpenShot(hit.shot.id)
                                 },
-                                onLongClick = {},
                                 overlay = {
                                     val tag = when {
                                         MatchReason.NOTE in hit.reasons -> "note"

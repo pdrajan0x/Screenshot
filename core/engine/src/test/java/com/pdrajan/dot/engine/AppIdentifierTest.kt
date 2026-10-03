@@ -58,6 +58,18 @@ class AppIdentifierTest {
     }
 
     @Test
+    fun theVisionModelsAnswerDecidesCloseCalls() {
+        val shot = mix(promptVectors.getValue("a screenshot of the WhatsApp app") to 1f, promptVectors.getValue("a screenshot of the Chrome app") to 1f)
+        val unsure = identifier().identify("Deepanshu Arya\nbana di pure ?\nMessage", listOf(shot), 0L)!!
+        assertTrue(unsure.confidence < 0.6f)
+        val sure = identifier().identify("Deepanshu Arya\nbana di pure ?\nMessage", listOf(shot), 0L, modelApp = "WhatsApp")!!
+        assertEquals("WhatsApp", sure.label)
+        assertTrue(sure.confidence > 0.8f)
+        // A generic answer ("messaging app") names nothing.
+        assertEquals(unsure.label, identifier().identify("Deepanshu Arya\nbana di pure ?\nMessage", listOf(shot), 0L, modelApp = "messaging app")!!.label)
+    }
+
+    @Test
     fun appsThatArentInstalledAreLessLikely() {
         val known = listOf(KnownShot("Zomato", null, 0L, listOf(axis())))
         // Nothing to go on: an installed app wins over one only seen in the past.

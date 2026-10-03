@@ -62,7 +62,7 @@ object SummaryPrompt {
 
 object SummaryParser {
 
-    private val FIELD = Regex("^\\s*(title|summary|app|tags)\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)
+    private val FIELD = Regex("^\\s*(title|summary|app|tags|keywords)\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)
     private val NO_APP = setOf("unknown", "none", "n/a", "na", "not known", "unclear", "-")
 
     fun parse(output: String): ScreenshotSummary? {
@@ -75,12 +75,7 @@ object SummaryParser {
         val summary = fields["summary"].orEmpty()
         if (title.isEmpty() && summary.isEmpty()) return null
         val app = fields["app"]?.takeIf { it.isNotEmpty() && it.lowercase() !in NO_APP }
-        val tags = fields["tags"].orEmpty()
-            .split(',', ';')
-            .map { it.trim().lowercase().replace('-', ' ').replace('_', ' ').replace(Regex("\\s+"), " ").trim('#', ' ', '.') }
-            .filter { it.length in 2..40 }
-            .distinct()
-            .take(12)
+        val tags = VisionPrompts.cleanKeywords((fields["keywords"] ?: fields["tags"]).orEmpty().replace('-', ' '))
         return ScreenshotSummary(title.take(90), summary.take(400), app?.take(40), tags)
     }
 

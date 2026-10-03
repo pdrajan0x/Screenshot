@@ -47,7 +47,6 @@ import com.pdrajan.dot.design.DotSearchField
 import com.pdrajan.dot.design.SectionLabel
 import com.pdrajan.dot.engine.DateQueryParser
 import com.pdrajan.dot.engine.HybridRanker
-import com.pdrajan.dot.engine.PhotoTags
 import com.pdrajan.dotgallery.GalleryContainer
 import com.pdrajan.dotgallery.data.Media
 import kotlinx.coroutines.delay
@@ -60,16 +59,20 @@ private suspend fun runSearch(c: GalleryContainer, query: String, withVisual: Bo
     val rest = parsed.rest
     val inRange: Set<Long>? = parsed.range?.let { c.repo.idsTakenBetween(it.startMillis, it.endMillis) }
     val text = if (rest.isNotBlank()) c.repo.textSearch(rest) else emptyList()
-    val tagIds = if (rest.isNotBlank()) PhotoTags.matchQuery(rest).flatMap { c.repo.tagMedia(it) }.distinct() else emptyList()
+    // Look-alike matching only fills in for photos the AI hasn't described yet: a described photo
+    // is found by what its description and keywords say, so "car" doesn't bring up bikes.
     val visual = if (withVisual && rest.isNotBlank()) {
-        runCatching { c.hub.clip()?.let { clip -> c.repo.visualSearch(rest, clip, inRange?.let { r -> { id: Long -> id in r } }) } }.getOrNull().orEmpty()
+        val described = c.repo.describedIds()
+        runCatching {
+            c.hub.clip()?.let { clip -> c.repo.visualSearch(rest, clip) { id -> id !in described && (inRange == null || id in inRange) } }
+        }.getOrNull().orEmpty()
     } else {
         emptyList()
     }
     val ranked = if (rest.isBlank() && inRange != null) {
         inRange.toList()
     } else {
-        HybridRanker.merge(text, visual, tagIds).map { it.id }.filter { inRange == null || it in inRange }
+        HybridRanker.merge(text, visual, emptyList()).map { it.id }.filter { inRange == null || it in inRange }
     }
     val byId = c.repo.mediaByIds(ranked)
     val items = ranked.mapNotNull { byId[it] }.let { list -> if (rest.isBlank()) list.sortedByDescending { it.takenAt } else list }
@@ -87,8 +90,9 @@ fun SearchScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
     var searching by remember { mutableStateOf(false) }
     var recent by remember { mutableStateOf(emptyList<String>()) }
     var selection by remember { mutableStateOf(emptySet<Long>()) }
+    var selecting by remember { mutableStateOf(false) }
+    val onSelection: (Set<Long>) -> Unit = { selection = it; if (it.isEmpty()) selecting = false }
     val people by remember { c.repo.observePeople() }.collectAsStateWithLifecycle(emptyList())
-    val tags by remember { c.repo.observeTagSummaries() }.collectAsStateWithLifecycle(emptyList())
     val columns by c.settings.columns.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) { recent = c.repo.recentSearches() }
@@ -108,7 +112,8 @@ fun SearchScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
     SelectionScaffold(
         items = items,
         selection = selection,
-        onSelectionChange = { selection = it },
+        onSelectionChange = onSelection,
+        selecting = selecting,
         topBar = {
             Column(Modifier.statusBarsPadding()) {
                 DotSearchField(
@@ -142,13 +147,6 @@ fun SearchScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
                     }
                     Spacer(Modifier.height(16.dp))
                 }
-                if (tags.isNotEmpty()) {
-                    SectionLabel("Things", Modifier.padding(horizontal = 20.dp))
-                    FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        tags.forEach { t -> DotChip(PhotoTags.byId(t.id)?.label ?: t.id, onClick = { nav.list(ListKind.TAG, t.id) }, count = t.count) }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
                 if (recent.isNotEmpty()) {
                     SectionLabel("Recent", Modifier.padding(horizontal = 20.dp)) {
                         TextButton(onClick = { scope.launch { c.repo.clearRecentSearches(); recent = emptyList() } }) { Text("Clear") }
@@ -176,7 +174,8 @@ fun SearchScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
                 columns = columns,
                 onColumnsChange = c.settings::setColumns,
                 selection = selection,
-                onSelectionChange = { selection = it },
+                onSelectionChange = onSelection,
+                selecting = selecting,
                 onOpen = { m -> nav.viewer(items.map { it.id }, m.id) },
                 contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp),
                 grouped = false,
@@ -193,6 +192,9 @@ fun SearchScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
                             modifier = Modifier.weight(1f),
                         )
                         if (searching) DotLoader()
+                        if (!searching && items.isNotEmpty() && selection.isEmpty() && !selecting) {
+                            TextButton(onClick = { selecting = true }) { Text("Select") }
+                        }
                     }
                 }
                 if (!searching && items.isEmpty()) {

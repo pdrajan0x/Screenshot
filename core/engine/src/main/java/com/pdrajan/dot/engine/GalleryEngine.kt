@@ -191,24 +191,38 @@ object ImageQuality {
         return sumSq / n - mean * mean
     }
 
-    data class Candidate(val id: Long, val hash: Long, val takenAt: Long, val pixels: Long, val sizeBytes: Long)
+    data class Candidate(
+        val id: Long,
+        val hash: Long,
+        val takenAt: Long,
+        val pixels: Long,
+        val sizeBytes: Long,
+        val sharpness: Double = 0.0,
+        val favorite: Boolean = false,
+        /** Width / height; 0 when unknown. A crop is a different photo, not a copy. */
+        val aspect: Float = 0f,
+    )
+
+    /** The copy to keep first: a favourite, then the most pixels, the sharpest, the largest file. */
+    val BEST_FIRST: Comparator<Candidate> = compareByDescending<Candidate> { it.favorite }
+        .thenByDescending { it.pixels }
+        .thenByDescending { it.sharpness }
+        .thenByDescending { it.sizeBytes }
 
     /**
-     * Groups near-identical photos: same dHash within [maxDistance] bits, taken within
-     * [windowMillis] of each other (bursts, re-saves, forwards). Each group is sorted best-first
-     * (most pixels, then largest file), so the first item is the one to keep.
+     * Groups near-identical photos (re-saves, forwards, burst shots): dHash within [maxDistance]
+     * bits, taken within [windowMillis], and [same] (a look-alike check) agrees. Every photo in a
+     * group is a near copy of the group's first one, the best (see [BEST_FIRST]), which is the one to
+     * keep: groups never chain A~B~C into A and C, which may look nothing alike.
      */
-    fun duplicateGroups(items: List<Candidate>, maxDistance: Int = 5, windowMillis: Long = Long.MAX_VALUE): List<List<Candidate>> {
+    fun duplicateGroups(
+        items: List<Candidate>,
+        maxDistance: Int = 4,
+        windowMillis: Long = Long.MAX_VALUE,
+        same: (Candidate, Candidate) -> Boolean = { _, _ -> true },
+    ): List<List<Candidate>> {
         val sorted = items.sortedBy { it.takenAt }
-        val parent = IntArray(sorted.size) { it }
-        fun find(i: Int): Int {
-            var x = i
-            while (parent[x] != x) {
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            }
-            return x
-        }
+        val near = Array(sorted.size) { HashSet<Int>() }
         // Pigeonhole: hashes within maxDistance bits agree exactly on at least one of
         // maxDistance + 1 bands, so only items sharing a band value are compared.
         val bands = maxDistance.coerceIn(0, 63) + 1
@@ -225,16 +239,33 @@ object ImageQuality {
                     for (y in x + 1 until bucket.size) {
                         val j = bucket[y]
                         if (windowMillis != Long.MAX_VALUE && sorted[j].takenAt - sorted[i].takenAt > windowMillis) break
-                        if (find(i) != find(j) && hamming(sorted[i].hash, sorted[j].hash) <= maxDistance) {
-                            parent[find(j)] = find(i)
-                        }
+                        if (j in near[i] || hamming(sorted[i].hash, sorted[j].hash) > maxDistance) continue
+                        if (!sameShape(sorted[i], sorted[j]) || !same(sorted[i], sorted[j])) continue
+                        near[i] += j
+                        near[j] += i
                     }
                 }
             }
         }
-        return sorted.indices.groupBy { find(it) }.values
-            .filter { it.size > 1 }
-            .map { idx -> idx.map { sorted[it] }.sortedWith(compareByDescending<Candidate> { it.pixels }.thenByDescending { it.sizeBytes }) }
-            .sortedByDescending { g -> g.maxOf { it.takenAt } }
+        return clusterAroundBest(sorted, near)
+    }
+
+    private fun sameShape(a: Candidate, b: Candidate): Boolean =
+        a.aspect <= 0f || b.aspect <= 0f || kotlin.math.abs(a.aspect - b.aspect) <= 0.03f * maxOf(a.aspect, b.aspect)
+
+    /** Best unassigned photo first; its group is the unassigned photos near it. */
+    internal fun clusterAroundBest(sorted: List<Candidate>, near: Array<out Set<Int>>): List<List<Candidate>> {
+        val assigned = BooleanArray(sorted.size)
+        val order = sorted.indices.filter { near[it].isNotEmpty() }.sortedWith { a, b -> BEST_FIRST.compare(sorted[a], sorted[b]) }
+        val groups = ArrayList<List<Candidate>>()
+        for (i in order) {
+            if (assigned[i]) continue
+            val members = near[i].filter { !assigned[it] }
+            if (members.isEmpty()) continue
+            assigned[i] = true
+            members.forEach { assigned[it] = true }
+            groups += listOf(sorted[i]) + members.map { sorted[it] }.sortedWith(BEST_FIRST)
+        }
+        return groups.sortedByDescending { g -> g.maxOf { it.takenAt } }
     }
 }

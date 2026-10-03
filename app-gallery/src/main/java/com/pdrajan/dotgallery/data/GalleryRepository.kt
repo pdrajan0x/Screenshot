@@ -73,7 +73,8 @@ class GalleryRepository(private val database: GalleryDatabase) {
     fun observeArchived(): Flow<List<Media>> = observe { mediaQuery("m.archived = 1") }
     fun observeVideos(): Flow<List<Media>> = observe { mediaQuery("m.type = 1") }
     fun observeFolder(bucketId: Long): Flow<List<Media>> = observe { mediaQuery("m.bucket_id = ?", arrayOf(bucketId.toString())) }
-    fun observeTag(tag: String): Flow<List<Media>> = observe { mediaQuery("m.tags LIKE ?", arrayOf("%,$tag,%")) }
+    /** Photos the AI gave this keyword. */
+    fun observeKeyword(keyword: String): Flow<List<Media>> = observe { mediaQuery("m.keywords LIKE ?", arrayOf("%,$keyword,%")) }
     fun observeRecentlyAdded(): Flow<List<Media>> = observe { mediaQuery("1 = 1", order = "m.added_at DESC LIMIT 300") }
     fun observeAlbum(albumId: Long): Flow<List<Media>> = observe {
         mediaQuery("ai.album_id = ?", arrayOf(albumId.toString()), order = "ai.added_at DESC", join = "JOIN album_items ai ON ai.media_id = m.id")
@@ -104,20 +105,6 @@ class GalleryRepository(private val database: GalleryDatabase) {
     ).use { c -> buildList { while (c.moveToNext()) add(AlbumSummary(c.getLong(0), c.getString(1), c.getInt(2), c.getString(3)?.toUri())) } }
 
     fun observeAlbumName(id: Long): Flow<String?> = observe { albums().firstOrNull { it.id == id }?.name }
-
-    fun observeTagSummaries(): Flow<List<TagSummary>> = observe {
-        val counts = LinkedHashMap<String, Pair<Int, android.net.Uri?>>()
-        db.rawQuery("SELECT tags, uri FROM media WHERE tags != '' ORDER BY taken_at DESC", null).use { c ->
-            while (c.moveToNext()) {
-                val uri = c.getString(1).toUri()
-                c.getString(0).split(',').filter { it.isNotEmpty() }.forEach { t ->
-                    val prev = counts[t]
-                    counts[t] = (prev?.first ?: 0) + 1 to (prev?.second ?: uri)
-                }
-            }
-        }
-        counts.map { (id, v) -> TagSummary(id, v.first, v.second) }.sortedByDescending { it.count }
-    }
 
     fun observePeople(includeHidden: Boolean = false): Flow<List<PersonSummary>> = observe { people(includeHidden) }
 
@@ -195,39 +182,48 @@ class GalleryRepository(private val database: GalleryDatabase) {
 
     // ---------------------------------------------------------------- search
 
-    /** FTS over file names, OCR text and tags, plus people by name. */
+    /**
+     * People by name, then whole words in file names, text in photos, descriptions and keywords
+     * ("car" finds cars, not carpets); word starts only when nothing matches whole words.
+     */
     suspend fun textSearch(query: String): List<Long> = withContext(Dispatchers.IO) {
         val out = LinkedHashSet<Long>()
         val terms = FtsQuery.terms(query)
         if (terms.isEmpty()) return@withContext emptyList()
-        val like = "%" + query.trim().replace("%", "") + "%"
+        // A person's name, or one whole word of it ("car" must not find Carol).
+        val name = query.trim().lowercase().replace(Regex("[%_]"), "")
         db.rawQuery(
             "SELECT DISTINCT f.media_id FROM faces f JOIN people p ON p.id = f.person_id JOIN media m ON m.id = f.media_id " +
-                "WHERE p.name LIKE ? ORDER BY m.taken_at DESC",
-            arrayOf(like),
+                "WHERE (' ' || LOWER(p.name) || ' ') LIKE ? ORDER BY m.taken_at DESC",
+            arrayOf("% $name %"),
         ).use { c -> while (c.moveToNext()) out += c.getLong(0) }
-        val match = FtsQuery.build(query)
-        if (match != null) {
-            try {
-                db.rawQuery("SELECT docid FROM media_fts WHERE media_fts MATCH ? LIMIT 2000", arrayOf(match)).use { c ->
-                    while (c.moveToNext()) out += c.getLong(0)
-                }
+        fun fts(match: String?): List<Long> {
+            if (match == null) return emptyList()
+            return try {
+                db.rawQuery(
+                    "SELECT f.docid FROM media_fts f JOIN media m ON m.id = f.docid WHERE media_fts MATCH ? ORDER BY m.taken_at DESC LIMIT 2000",
+                    arrayOf(match),
+                ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
             } catch (_: SQLiteException) {
+                emptyList()
             }
         }
+        out += fts(FtsQuery.words(query)).ifEmpty { fts(FtsQuery.build(query)) }
         out.toList()
     }
 
-    suspend fun tagMedia(tag: String): List<Long> = withContext(Dispatchers.IO) {
-        db.rawQuery("SELECT id FROM media WHERE tags LIKE ? ORDER BY taken_at DESC", arrayOf("%,$tag,%")).use { c ->
-            buildList { while (c.moveToNext()) add(c.getLong(0)) }
+    /** Ids the AI has described: search trusts their descriptions and keywords over look-alike matching. */
+    suspend fun describedIds(): Set<Long> = withContext(Dispatchers.IO) {
+        db.rawQuery("SELECT id FROM media WHERE caption_state = ?", arrayOf(CAPTION_DONE.toString())).use { c ->
+            buildSet { while (c.moveToNext()) add(c.getLong(0)) }
         }
     }
 
+    /** Look-alike matches (CLIP), only among [filter]ed ids, with a strict similarity floor. */
     suspend fun visualSearch(query: String, clip: ClipModel, filter: ((Long) -> Boolean)? = null): List<VectorHit> = withContext(Dispatchers.Default) {
         ensureVectors()
         if (vectorIndex.size == 0) return@withContext emptyList()
-        HybridRanker.filterVisual(vectorIndex.search(clip.embedQuery(query), 300, filter), max = 200)
+        HybridRanker.filterVisual(vectorIndex.search(clip.embedQuery(query), 300, filter), floor = 0.22f, dropFromTop = 0.04f, max = 120)
     }
 
     suspend fun similar(id: Long, limit: Int = 18): List<Long> = withContext(Dispatchers.Default) {
@@ -411,10 +407,11 @@ class GalleryRepository(private val database: GalleryDatabase) {
         ).use { c -> buildList { while (c.moveToNext()) add(CaptionJob(c.getLong(0), c.getString(1).toUri(), c.getString(2))) } }
     }
 
-    suspend fun saveCaption(id: Long, caption: String) = withContext(Dispatchers.IO) {
+    suspend fun saveCaption(id: Long, caption: String, keywords: List<String>) = withContext(Dispatchers.IO) {
         db.beginTransaction()
         try {
-            db.execSQL("UPDATE media SET caption = ?, caption_state = ? WHERE id = ?", arrayOf<Any>(caption, CAPTION_DONE, id))
+            val kw = if (keywords.isEmpty()) "" else keywords.joinToString(",", ",", ",") { it.replace(",", " ") }
+            db.execSQL("UPDATE media SET caption = ?, keywords = ?, caption_state = ? WHERE id = ?", arrayOf<Any>(caption, kw, CAPTION_DONE, id))
             rewriteFts(id)
             db.setTransactionSuccessful()
         } finally {
@@ -595,9 +592,43 @@ class GalleryRepository(private val database: GalleryDatabase) {
 
     // ---------------------------------------------------------------- utilities
 
+    /** Photos to check for duplicates. Screenshots are left out: two screens of one app look alike but aren't copies. */
     suspend fun duplicateCandidates(): List<ImageQuality.Candidate> = withContext(Dispatchers.IO) {
-        db.rawQuery("SELECT id, dhash, taken_at, width * height, size FROM media WHERE dhash IS NOT NULL AND type = 0", null).use { c ->
-            buildList { while (c.moveToNext()) add(ImageQuality.Candidate(c.getLong(0), c.getLong(1), c.getLong(2), c.getLong(3), c.getLong(4))) }
+        db.rawQuery(
+            "SELECT id, dhash, taken_at, width * height, size, COALESCE(sharpness, 0), favorite, width, height FROM media " +
+                "WHERE dhash IS NOT NULL AND type = 0 AND COALESCE(path, '') NOT LIKE '%Screenshot%' AND COALESCE(bucket, '') NOT LIKE '%Screenshot%'",
+            null,
+        ).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    val h = c.getInt(8)
+                    add(
+                        ImageQuality.Candidate(
+                            id = c.getLong(0), hash = c.getLong(1), takenAt = c.getLong(2), pixels = c.getLong(3), sizeBytes = c.getLong(4),
+                            sharpness = c.getDouble(5), favorite = c.getInt(6) == 1, aspect = if (h > 0) c.getInt(7).toFloat() / h else 0f,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether two photos look the same to CLIP (cosine at least [min]): the check that keeps two
+     * different photos with a similar layout (two dark shots, two white pages) out of a duplicate
+     * group. Photos without an embedding are left to the hash.
+     */
+    suspend fun lookAlike(min: Float = 0.95f): (Long, Long) -> Boolean {
+        ensureVectors()
+        val cache = HashMap<Long, FloatArray?>()
+        fun vector(id: Long): FloatArray? {
+            if (id !in cache) cache[id] = vectorIndex.vectorsOf(id)?.takeIf { it.isNotEmpty() }?.let(VectorMath::mean)
+            return cache[id]
+        }
+        return { a, b ->
+            val x = vector(a)
+            val y = vector(b)
+            x == null || y == null || VectorMath.dot(x, y) >= min
         }
     }
 
@@ -628,7 +659,8 @@ class GalleryRepository(private val database: GalleryDatabase) {
         bucket = getString(11),
         favorite = getInt(12) == 1,
         archived = getInt(13) == 1,
-        tags = getString(14).split(',').filter { it.isNotEmpty() },
+        keywords = getString(14).split(',').filter { it.isNotEmpty() },
+        described = getInt(15) == CAPTION_DONE,
     )
 
     private fun Cursor.mediaList(): List<Media> = buildList(count) { while (moveToNext()) add(media()) }
@@ -641,7 +673,8 @@ class GalleryRepository(private val database: GalleryDatabase) {
         const val CAPTION_DONE = 1
         const val CAPTION_FAILED = 2
         private const val MEDIA_COLS =
-            "m.id, m.uri, m.type, m.name, m.mime, m.taken_at, m.width, m.height, m.size, m.duration, m.bucket_id, m.bucket, m.favorite, m.archived, m.tags"
-        private const val MEDIA_COL_COUNT = 15
+            "m.id, m.uri, m.type, m.name, m.mime, m.taken_at, m.width, m.height, m.size, m.duration, m.bucket_id, m.bucket, m.favorite, m.archived, " +
+                "m.keywords, m.caption_state"
+        private const val MEDIA_COL_COUNT = 16
     }
 }

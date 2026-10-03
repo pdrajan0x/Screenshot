@@ -110,6 +110,7 @@ fun MediaThumb(
         selectionMode = selectionMode,
         onClick = onClick,
         onLongClick = null,
+        processed = media.described,
     ) {
         if (media.isVideo) {
             Row(
@@ -129,65 +130,6 @@ fun MediaThumb(
             )
         }
     }
-}
-
-/**
- * Long-press then drag across a grid to select a range (Google Photos gesture).
- * [keyAt] maps a grid item key to a media id (null for headers).
- */
-fun Modifier.dragToSelect(
-    state: LazyGridState,
-    selected: () -> Set<Long>,
-    onChange: (Set<Long>) -> Unit,
-    orderedIds: () -> List<Long>,
-    scope: kotlinx.coroutines.CoroutineScope,
-): Modifier = pointerInput(state) {
-    var anchor: Long? = null
-    var initial: Set<Long> = emptySet()
-    var autoScroll: Job? = null
-    var speed = 0f
-
-    fun idAt(offset: Offset): Long? = state.layoutInfo.visibleItemsInfo.firstOrNull { info ->
-        val o = info.offset
-        offset.x.toInt() in o.x until o.x + info.size.width && offset.y.toInt() in o.y until o.y + info.size.height
-    }?.key as? Long
-
-    fun extendTo(id: Long) {
-        val start = anchor ?: return
-        val ids = orderedIds()
-        val a = ids.indexOf(start)
-        val b = ids.indexOf(id)
-        if (a < 0 || b < 0) return
-        val range = ids.subList(minOf(a, b), maxOf(a, b) + 1).toSet()
-        onChange(initial + range)
-    }
-
-    detectDragGesturesAfterLongPress(
-        onDragStart = { offset ->
-            val id = idAt(offset) ?: return@detectDragGesturesAfterLongPress
-            anchor = id
-            initial = selected()
-            onChange(initial + id)
-            autoScroll = scope.launch {
-                while (isActive) {
-                    if (speed != 0f) state.scrollBy(speed)
-                    delay(16)
-                }
-            }
-        },
-        onDrag = { change, _ ->
-            val y = change.position.y
-            val h = size.height
-            speed = when {
-                y < 80 -> -18f
-                y > h - 80 -> 18f
-                else -> 0f
-            }
-            idAt(change.position)?.let(::extendTo)
-        },
-        onDragEnd = { anchor = null; speed = 0f; autoScroll?.cancel() },
-        onDragCancel = { anchor = null; speed = 0f; autoScroll?.cancel() },
-    )
 }
 
 /** Launches MediaStore confirmation requests (trash, restore, delete forever). */

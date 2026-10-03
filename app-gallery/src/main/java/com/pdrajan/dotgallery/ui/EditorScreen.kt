@@ -40,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,6 +64,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -77,7 +80,6 @@ import com.pdrajan.dot.media.MediaWriter
 import com.pdrajan.dot.ml.BitmapLoader
 import com.pdrajan.dotgallery.data.Media
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -175,13 +177,31 @@ fun EditorScreen(id: Long, nav: GalleryNav) {
         source = withContext(Dispatchers.IO) { BitmapLoader.load(ctx.contentResolver, m.uri, maxWidth = 2560, maxPixels = 8_000_000) }
     }
 
-    // Rebuild the rotated / flipped / straightened base whenever those change (debounced for the slider).
-    LaunchedEffect(source, rotation, flip, straighten) {
+    // Rotate and flip are taps: the base is rebuilt. Straighten and every adjustment are drawn live
+    // on top of it and only applied to the full-size image when saving.
+    LaunchedEffect(source, rotation, flip) {
         val src = source ?: return@LaunchedEffect
-        delay(if (straighten != 0f) 120 else 0)
-        val b = withContext(Dispatchers.Default) { transformBase(src, rotation, flip, straighten) }
+        val b = withContext(Dispatchers.Default) { transformBase(src, rotation, flip, 0f) }
         baseBitmap = b
         base = b.asImageBitmap()
+    }
+
+    val edited = rotation != 0 || flip || straighten != 0f || crop != Rect(0f, 0f, 1f, 1f) || brightness != 0f || contrast != 0f ||
+        saturation != 0f || warmth != 0f || vignette != 0f || filter != FILTERS.first() || strokes.isNotEmpty()
+
+    fun reset() {
+        rotation = 0
+        flip = false
+        straighten = 0f
+        crop = Rect(0f, 0f, 1f, 1f)
+        aspect = ASPECTS.first()
+        brightness = 0f
+        contrast = 0f
+        saturation = 0f
+        warmth = 0f
+        vignette = 0f
+        filter = FILTERS.first()
+        strokes.clear()
     }
 
     fun colorMatrix(): FloatArray {
@@ -198,7 +218,10 @@ fun EditorScreen(id: Long, nav: GalleryNav) {
         val m = media ?: return
         saving = true
         scope.launch {
-            val out = withContext(Dispatchers.Default) { render(b, crop, colorMatrix(), vignette, strokes.toList()) }
+            val out = withContext(Dispatchers.Default) {
+                val straight = if (straighten != 0f) transformBase(b, 0, false, straighten) else b
+                render(straight, crop, colorMatrix(), vignette, strokes.toList()).also { if (straight !== b) straight.recycle() }
+            }
             val name = m.name.substringBeforeLast('.') + "_edited.jpg"
             val uri = withContext(Dispatchers.IO) {
                 val tmp = File(ctx.cacheDir, "edit-${System.currentTimeMillis()}.jpg")
@@ -229,6 +252,9 @@ fun EditorScreen(id: Long, nav: GalleryNav) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { nav.back() }) { Icon(Icons.Rounded.Close, "Cancel", tint = Color.White) }
             Spacer(Modifier.weight(1f))
+            if (edited && !saving) {
+                TextButton(onClick = ::reset) { Text("Reset", color = Color.White) }
+            }
             if (saving) DotLoader(Modifier.padding(end = 16.dp))
             else DotPrimaryButton("Save copy", onClick = ::save, accent = true, modifier = Modifier.padding(end = 8.dp))
         }
@@ -245,7 +271,6 @@ fun EditorScreen(id: Long, nav: GalleryNav) {
                 val scale = min(constraints.maxWidth / regionW, constraints.maxHeight / regionH)
                 val w = regionW * scale
                 val h = regionH * scale
-                val matrix = colorMatrix()
                 val density = androidx.compose.ui.platform.LocalDensity.current
                 Box(Modifier.size(with(density) { w.toDp() }, with(density) { h.toDp() })) {
                     Canvas(
@@ -267,13 +292,27 @@ fun EditorScreen(id: Long, nav: GalleryNav) {
                             },
                         ),
                     ) {
-                        drawImage(
-                            image = img,
-                            srcOffset = IntOffset((region.left * img.width).toInt(), (region.top * img.height).toInt()),
-                            srcSize = IntSize(regionW.toInt().coerceAtLeast(1), regionH.toInt().coerceAtLeast(1)),
-                            dstSize = IntSize(size.width.toInt(), size.height.toInt()),
-                            colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(matrix)),
-                        )
+                        // Read here (draw phase), so moving a slider only redraws the picture.
+                        val filterColors = androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(colorMatrix()))
+                        // The whole (straightened) picture in this view's coordinates; the crop region fills the view.
+                        val fullW = size.width / region.width
+                        val fullH = size.height / region.height
+                        val pivot = Offset(fullW / 2, fullH / 2)
+                        val zoom = straightenZoom(fullW, fullH, straighten)
+                        clipRect {
+                            withTransform({
+                                translate(-region.left * fullW, -region.top * fullH)
+                                rotate(straighten, pivot)
+                                scale(zoom, zoom, pivot)
+                            }) {
+                                drawImage(
+                                    image = img,
+                                    dstSize = IntSize(fullW.toInt().coerceAtLeast(1), fullH.toInt().coerceAtLeast(1)),
+                                    colorFilter = filterColors,
+                                    filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium,
+                                )
+                            }
+                        }
                         if (vignette > 0f) {
                             drawRect(
                                 brush = androidx.compose.ui.graphics.Brush.radialGradient(
@@ -311,6 +350,7 @@ fun EditorScreen(id: Long, nav: GalleryNav) {
                         IconButton(onClick = { flip = !flip }) { Icon(Icons.Rounded.Flip, "Flip", tint = Color.White) }
                         Text("Straighten", style = MaterialTheme.typography.labelMedium, color = Color.White, modifier = Modifier.padding(horizontal = 8.dp))
                         Slider(value = straighten, onValueChange = { straighten = it }, valueRange = -45f..45f, modifier = Modifier.weight(1f), colors = sliderColors())
+                        Text("${straighten.toInt()}°", style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.width(36.dp).clickable { straighten = 0f })
                     }
                 }
                 EditTab.ADJUST -> Column(Modifier.padding(horizontal = 16.dp)) {
@@ -449,6 +489,13 @@ private fun strokePath(points: List<Offset>, size: Size): Path = Path().apply {
     points.drop(1).forEach { lineTo(it.x * size.width, it.y * size.height) }
 }
 
+/** How much a picture of [w]×[h] must grow, rotated by [degrees], to leave no empty corners. */
+private fun straightenZoom(w: Float, h: Float, degrees: Float): Float {
+    if (degrees == 0f || w <= 0f || h <= 0f) return 1f
+    val rad = Math.toRadians(abs(degrees).toDouble())
+    return max((w * cos(rad) + h * sin(rad)) / w, (w * sin(rad) + h * cos(rad)) / h).toFloat()
+}
+
 private fun transformBase(src: Bitmap, rotation: Int, flip: Boolean, straighten: Float): Bitmap {
     val m = Matrix()
     if (flip) m.postScale(-1f, 1f)
@@ -457,8 +504,7 @@ private fun transformBase(src: Bitmap, rotation: Int, flip: Boolean, straighten:
     if (straighten != 0f) {
         val w = out.width.toFloat()
         val h = out.height.toFloat()
-        val rad = Math.toRadians(abs(straighten).toDouble())
-        val s = max((w * cos(rad) + h * sin(rad)) / w, (w * sin(rad) + h * cos(rad)) / h).toFloat()
+        val s = straightenZoom(w, h, straighten)
         val dst = Bitmap.createBitmap(out.width, out.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(dst)
         canvas.translate(w / 2, h / 2)

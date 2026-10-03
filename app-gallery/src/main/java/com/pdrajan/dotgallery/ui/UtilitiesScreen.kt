@@ -74,7 +74,8 @@ fun UtilitiesScreen(nav: GalleryNav) {
 
     LaunchedEffect(refresh) {
         groups = withContext(Dispatchers.Default) {
-            val found = ImageQuality.duplicateGroups(c.repo.duplicateCandidates(), maxDistance = 4)
+            val same = c.repo.lookAlike()
+            val found = ImageQuality.duplicateGroups(c.repo.duplicateCandidates(), maxDistance = 4) { a, b -> same(a.id, b.id) }
             val byId = c.repo.mediaByIds(found.flatten().map { it.id })
             found.map { g -> g.mapNotNull { byId[it.id] } }.filter { it.size > 1 }
         }
@@ -140,7 +141,7 @@ fun UtilitiesScreen(nav: GalleryNav) {
             item {
                 SectionLabel("Duplicates", Modifier.padding(horizontal = 20.dp))
                 Text(
-                    "Near-identical photos (re-saves, forwards, bursts). The highest-resolution copy is kept. Only analysed photos are checked.",
+                    "Near-identical photos (re-saves, forwards, bursts). The copy marked Best is kept: a favourite, else the sharpest, highest-resolution one. Screenshots aren't checked.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp),

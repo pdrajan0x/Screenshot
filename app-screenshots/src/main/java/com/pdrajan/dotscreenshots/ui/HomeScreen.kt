@@ -20,6 +20,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.runtime.rememberUpdatedState
+import com.pdrajan.dot.design.dragToSelect
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -72,6 +76,7 @@ import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.IndexCounts
 import com.pdrajan.dotscreenshots.data.Shot
 import com.pdrajan.dotscreenshots.data.ShotCollection
+import com.pdrajan.dotscreenshots.data.SummaryCounts
 import com.pdrajan.dotscreenshots.index.IndexProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,6 +101,7 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
     val progress: StateFlow<IndexProgress> = c.engine.progress
     val lastError: StateFlow<String?> = c.engine.lastError
     val summaryProgress: StateFlow<IndexProgress> = c.summaries.progress
+    val summaryCounts = c.repo.observeSummaryCounts().stateIn(viewModelScope, started, SummaryCounts(0, 0))
     val backlogRunning: StateFlow<Boolean> = c.backlogRunning
     val columns: StateFlow<Int> = c.settings.gridColumns
     val modelAvailable: Boolean get() = c.hub.available
@@ -103,12 +109,26 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
     private val _selection = MutableStateFlow<Set<Long>>(emptySet())
     val selection: StateFlow<Set<Long>> = _selection.asStateFlow()
 
+    /** "Select" was tapped: taps select even before anything is selected. */
+    private val _selecting = MutableStateFlow(false)
+    val selecting: StateFlow<Boolean> = _selecting.asStateFlow()
+
     fun toggle(id: Long) {
-        _selection.value = _selection.value.let { if (id in it) it - id else it + id }
+        setSelection(_selection.value.let { if (id in it) it - id else it + id })
+    }
+
+    fun setSelection(ids: Set<Long>) {
+        _selection.value = ids
+        if (ids.isEmpty()) _selecting.value = false
+    }
+
+    fun startSelecting() {
+        _selecting.value = true
     }
 
     fun clearSelection() {
         _selection.value = emptySet()
+        _selecting.value = false
     }
 
     fun selectAll() {
@@ -167,11 +187,17 @@ fun HomeScreen(
     val progress by vm.progress.collectAsStateWithLifecycle()
     val lastError by vm.lastError.collectAsStateWithLifecycle()
     val summaryProgress by vm.summaryProgress.collectAsStateWithLifecycle()
+    val summaryCounts by vm.summaryCounts.collectAsStateWithLifecycle()
     var diagnostics by remember { mutableStateOf(false) }
     val backlogRunning by vm.backlogRunning.collectAsStateWithLifecycle()
     val columns by vm.columns.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
-    val selectionMode = selection.isNotEmpty()
+    val selecting by vm.selecting.collectAsStateWithLifecycle()
+    val selectionMode = selecting || selection.isNotEmpty()
+    val gridState = rememberLazyGridState()
+    val currentSelection by rememberUpdatedState(selection)
+    val orderedIds = remember(shots) { shots.map { it.id } }
+    val currentIds by rememberUpdatedState(orderedIds)
     var showPicker by remember { mutableStateOf(false) }
     val deleter = rememberDeleteLauncher()
 
@@ -193,7 +219,7 @@ fun HomeScreen(
         topBar = {
             if (selectionMode) {
                 TopAppBar(
-                    title = { Text("${selection.size} selected", style = MaterialTheme.typography.titleLarge) },
+                    title = { Text(if (selection.isEmpty()) "Select screenshots" else "${selection.size} selected", style = MaterialTheme.typography.titleLarge) },
                     navigationIcon = { IconButton(onClick = vm::clearSelection) { Icon(Icons.Rounded.Close, "Clear selection") } },
                     actions = { IconButton(onClick = vm::selectAll) { Icon(Icons.Rounded.SelectAll, "Select all") } },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -201,7 +227,7 @@ fun HomeScreen(
             }
         },
         bottomBar = {
-            if (selectionMode) {
+            if (selection.isNotEmpty()) {
                 SelectionBar(
                     onAdd = { showPicker = true },
                     onShare = { context.startSafely(MediaActions.shareIntent(vm.selectedUris())) },
@@ -212,13 +238,17 @@ fun HomeScreen(
     ) { padding ->
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
+            state = gridState,
             contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp),
-            modifier = Modifier.fillMaxSize().pinchToChangeColumns(columns, vm::setColumns, min = 2, max = 5),
+            modifier = Modifier.fillMaxSize()
+                .pinchToChangeColumns(columns, vm::setColumns, min = 2, max = 5)
+                .dragToSelect(gridState, { currentSelection }, vm::setSelection, { currentIds }),
         ) {
             if (!selectionMode) {
                 fullSpan("header") {
                     Row(Modifier.padding(start = 20.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         DotLargeTitle("SCREENSHOTS", Modifier.weight(1f))
+                        if (shots.isNotEmpty()) IconButton(onClick = vm::startSelecting) { Icon(Icons.Rounded.Checklist, "Select") }
                         IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
                     }
                 }
@@ -227,16 +257,15 @@ fun HomeScreen(
                 }
                 fullSpan("status") {
                     Column {
-                        StatusStrip(progress, counts, backlogRunning, vm.modelAvailable, lastError, vm::processAll, vm::stopProcessing) { diagnostics = true }
+                        StatusStrip(progress, counts, summaryCounts.waiting, summaryProgress.running, backlogRunning, vm.modelAvailable, lastError, vm::processAll, vm::stopProcessing) { diagnostics = true }
                         if (summaryProgress.running) {
                             DotProgressStrip(
-                                if (summaryProgress.preparing) "Loading the summary model…"
+                                if (summaryProgress.preparing) "Loading the AI model…"
                                 else "Writing summaries · ${summaryProgress.done} of ${summaryProgress.total}",
                                 Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                                 progress = if (summaryProgress.total > 0 && !summaryProgress.preparing) summaryProgress.done.toFloat() / summaryProgress.total else null,
                             )
                         }
-                        SmartSearchTip(appContainer(), Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
                     }
                 }
                 if (collections.isNotEmpty() || favoriteCount > 0) {
@@ -287,7 +316,6 @@ fun HomeScreen(
                         selected = shot.id in selection,
                         selectionMode = selectionMode,
                         onClick = { if (selectionMode) vm.toggle(shot.id) else onOpenShot(shot.id) },
-                        onLongClick = { vm.toggle(shot.id) },
                     )
                 }
             }
@@ -303,6 +331,8 @@ private fun LazyGridScope.fullSpan(key: String, content: @Composable () -> Unit)
 private fun StatusStrip(
     progress: IndexProgress,
     counts: IndexCounts,
+    toSummarise: Int,
+    summarising: Boolean,
     backlogRunning: Boolean,
     modelAvailable: Boolean,
     lastError: String?,
@@ -330,8 +360,8 @@ private fun StatusStrip(
             modifier = modifier,
             action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
         )
-        counts.pending > 0 -> DotProgressStrip(
-            text = "${counts.pending} older screenshots will be processed while charging",
+        counts.pending > 0 || (toSummarise > 0 && !summarising) -> DotProgressStrip(
+            text = if (counts.pending > 0) "${counts.pending} screenshots waiting to be read" else "$toSummarise screenshots waiting for a summary",
             modifier = modifier,
             action = { TextButton(onClick = onProcessAll) { Text("Do it now", color = DotTheme.extra.accent) } },
         )

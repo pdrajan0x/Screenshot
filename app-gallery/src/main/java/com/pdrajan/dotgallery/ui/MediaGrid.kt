@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.pdrajan.dot.design.dragToSelect
 import com.pdrajan.dot.design.pinchToChangeColumns
 import com.pdrajan.dot.media.MediaActions
 import com.pdrajan.dotgallery.data.Media
@@ -51,11 +52,12 @@ fun MediaGrid(
     modifier: Modifier = Modifier,
     grouped: Boolean = true,
     state: LazyGridState = rememberLazyGridState(),
+    /** Taps select instead of open: something is selected, or "Select" was chosen. */
+    selecting: Boolean = selection.isNotEmpty(),
     header: LazyGridScope.() -> Unit = {},
 ) {
-    val scope = rememberCoroutineScope()
     val currentSelection by rememberUpdatedState(selection)
-    val selectionMode = selection.isNotEmpty()
+    val selectionMode = selecting || selection.isNotEmpty()
     val groups = remember(items, columns, grouped) { if (grouped) sections(items, columns) else null }
     val orderedIds = remember(items) { items.map { it.id } }
     val currentIds by rememberUpdatedState(orderedIds)
@@ -66,7 +68,7 @@ fun MediaGrid(
         modifier = modifier
             .fillMaxSize()
             .pinchToChangeColumns(columns, onColumnsChange, min = 2, max = 7)
-            .dragToSelect(state, { currentSelection }, onSelectionChange, { currentIds }, scope),
+            .dragToSelect(state, { currentSelection }, onSelectionChange, { currentIds }),
     ) {
         header()
         if (groups != null) {
@@ -108,6 +110,7 @@ fun SelectionScaffold(
     modifier: Modifier = Modifier,
     bottomBar: @Composable () -> Unit = {},
     selectionActions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    selecting: Boolean = selection.isNotEmpty(),
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val c = galleryContainer()
@@ -118,7 +121,7 @@ fun SelectionScaffold(
     val albums by remember { c.repo.observeAlbums() }.collectAsStateWithLifecycle(emptyList())
     var albumPicker by remember { mutableStateOf(false) }
     val selected = items.filter { it.id in selection }
-    val selectionMode = selection.isNotEmpty()
+    val selectionMode = selecting || selection.isNotEmpty()
 
     BackHandler(enabled = selectionMode) { onSelectionChange(emptySet()) }
 
@@ -145,7 +148,9 @@ fun SelectionScaffold(
         topBar = {
             if (selectionMode) {
                 TopAppBar(
-                    title = { Text("${selection.size} selected", style = MaterialTheme.typography.titleLarge) },
+                    title = {
+                        Text(if (selection.isEmpty()) "Select items" else "${selection.size} selected", style = MaterialTheme.typography.titleLarge)
+                    },
                     navigationIcon = { IconButton(onClick = { onSelectionChange(emptySet()) }) { Icon(Icons.Rounded.Close, "Clear selection") } },
                     actions = {
                         selectionActions()
@@ -158,7 +163,7 @@ fun SelectionScaffold(
             }
         },
         bottomBar = {
-            if (selectionMode) {
+            if (selectionMode && selection.isNotEmpty()) {
                 SelectionActions(
                     onShare = {
                         val mime = if (selected.all { !it.isVideo }) "image/*" else if (selected.all { it.isVideo }) "video/*" else "*/*"

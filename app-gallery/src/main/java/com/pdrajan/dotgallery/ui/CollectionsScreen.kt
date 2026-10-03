@@ -61,7 +61,6 @@ import com.pdrajan.dot.design.DotLargeTitle
 import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.design.SectionLabel
-import com.pdrajan.dot.engine.PhotoTags
 import com.pdrajan.dotgallery.data.PersonSummary
 import kotlinx.coroutines.launch
 import java.io.File
@@ -73,7 +72,6 @@ fun CollectionsScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
     val scope = rememberCoroutineScope()
     val albums by remember { c.repo.observeAlbums() }.collectAsStateWithLifecycle(emptyList())
     val folders by remember { c.repo.observeFolders() }.collectAsStateWithLifecycle(emptyList())
-    val tags by remember { c.repo.observeTagSummaries() }.collectAsStateWithLifecycle(emptyList())
     val people by remember { c.repo.observePeople() }.collectAsStateWithLifecycle(emptyList())
     var newAlbum by remember { mutableStateOf(false) }
 
@@ -118,17 +116,13 @@ fun CollectionsScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
                 Spacer(Modifier.height(16.dp))
             }
 
-            val pets = tags.filter { it.id == "dog" || it.id == "cat" }
-            if (people.isNotEmpty() || pets.isNotEmpty()) {
+            if (people.isNotEmpty()) {
                 item {
-                    SectionLabel("People & pets", Modifier.padding(horizontal = 20.dp)) {
-                        if (people.isNotEmpty()) TextButton(onClick = nav::people) { Text("See all") }
+                    SectionLabel("People", Modifier.padding(horizontal = 20.dp)) {
+                        TextButton(onClick = nav::people) { Text("See all") }
                     }
                     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         items(people.take(20), key = { "p${it.id}" }) { p -> PersonBubble(p) { nav.list(ListKind.PERSON, p.id.toString()) } }
-                        items(pets, key = { "t${it.id}" }) { t ->
-                            TagBubble(t.cover, PhotoTags.byId(t.id)?.label ?: t.id) { nav.list(ListKind.TAG, t.id) }
-                        }
                     }
                     Spacer(Modifier.height(16.dp))
                 }
@@ -141,19 +135,6 @@ fun CollectionsScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
                     items(albums, key = { it.id }) { a -> CoverCard(a.cover, a.name, "${a.count} items") { nav.list(ListKind.ALBUM, a.id.toString()) } }
                 }
                 Spacer(Modifier.height(16.dp))
-            }
-
-            val things = tags.filter { it.id != "dog" && it.id != "cat" }
-            if (things.isNotEmpty()) {
-                item {
-                    SectionLabel("Things", Modifier.padding(horizontal = 20.dp))
-                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(things, key = { it.id }) { t ->
-                            CoverCard(t.cover, PhotoTags.byId(t.id)?.label ?: t.id, "${t.count}") { nav.list(ListKind.TAG, t.id) }
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
             }
 
             if (folders.isNotEmpty()) {
@@ -202,16 +183,6 @@ fun PersonBubble(p: PersonSummary, size: Int = 76, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 6.dp),
         )
-    }
-}
-
-@Composable
-private fun TagBubble(cover: Uri?, label: String, onClick: () -> Unit) {
-    Column(Modifier.width(76.dp).clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(76.dp).clip(CircleShape)) {
-            MediaThumbnail(model = cover, aspectRatio = 1f, onClick = onClick)
-        }
-        Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.padding(top = 6.dp))
     }
 }
 

@@ -1,104 +1,91 @@
 package com.pdrajan.dotgallery.ui
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import android.os.Build
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.pdrajan.dot.design.DotOutlinedButton
-import com.pdrajan.dot.design.DotPrimaryButton
-import com.pdrajan.dot.design.DotTheme
-import com.pdrajan.dot.design.SettingsSwitchRow
+import com.pdrajan.dot.design.ModelDownloadUi
+import com.pdrajan.dot.design.ModelSetupScreen
+import com.pdrajan.dot.design.SettingsRow
+import com.pdrajan.dot.llm.ModelBundle
 import com.pdrajan.dot.llm.ModelDownloader
+import com.pdrajan.dot.llm.SharedModel
 import com.pdrajan.dotgallery.GalleryContainer
 
 private fun mb(bytes: Long) = "%,d MB".format(bytes / 1_000_000)
 
-/** Settings: the photo description model (download, progress, on/off, delete). */
+fun ModelBundle.downloadUi(state: ModelDownloader.State): ModelDownloadUi = when (state) {
+    ModelDownloader.State.Ready -> ModelDownloadUi(true, false, false, sizeBytes, sizeBytes, null)
+    is ModelDownloader.State.Downloading -> ModelDownloadUi(false, true, false, state.bytes, state.total, null)
+    ModelDownloader.State.Verifying -> ModelDownloadUi(false, false, true, sizeBytes, sizeBytes, null)
+    is ModelDownloader.State.Failed -> ModelDownloadUi(false, false, false, state.bytes, sizeBytes, state.message)
+    ModelDownloader.State.Missing -> ModelDownloadUi(false, false, false, downloadedBytes(), sizeBytes, null)
+}
+
+/** Shown instead of the app until the AI model is on the phone. */
 @Composable
-fun PhotoDescriptionsPanel(c: GalleryContainer) {
+fun ModelGate(c: GalleryContainer) {
+    val ctx = LocalContext.current
     val model = c.describerModel
     val state by remember { model.state }.collectAsStateWithLifecycle(model.currentState())
-    val enabled by c.settings.captionsEnabled.collectAsStateWithLifecycle()
+    // Back from "All files access" (or the Files app): look for the other app's copy again.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.refresh() }
+    ModelSetupScreen(
+        appName = "Dot Gallery",
+        modelName = model.label,
+        ui = model.downloadUi(state),
+        onDownload = { c.downloadDescriber() },
+        onPause = { c.pauseDescriberDownload() },
+        onUseOtherAppsCopy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            {
+                if (SharedModel.canReadOtherAppsFiles()) {
+                    model.refresh()
+                    if (!model.isReady()) ctx.toast("Not found in Download/AI Models yet. Finish the download in Dot Screenshots first.")
+                } else {
+                    ctx.startSafely(SharedModel.allFilesAccessIntent(ctx))
+                }
+            }
+        } else {
+            null
+        },
+    )
+}
+
+/** Settings: what the AI model has done, and old model files that can go. */
+@Composable
+fun AiModelPanel(c: GalleryContainer) {
+    val ctx = LocalContext.current
+    val model = c.describerModel
     val counts by remember { c.repo.observeCaptionCounts() }.collectAsStateWithLifecycle(0 to 0)
-    val m = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-    when (val s = state) {
-        ModelDownloader.State.Ready -> {
-            SettingsSwitchRow(
-                title = "Photo descriptions",
-                subtitle = "A sentence about each photo, written on this phone by ${model.label}, so you can search what's in it. " +
-                    "${counts.first} described" + if (counts.second > 0) ", ${counts.second} waiting (described while charging)." else ".",
-                checked = enabled,
-                onCheckedChange = { c.settings.setCaptionsEnabled(it); if (it) c.onForeground() },
-            )
-            Text(
-                "Model saved in Download/AI Models · other apps can open it from there",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp),
-            )
-            TextButton(onClick = { c.deleteDescriber() }, modifier = Modifier.padding(start = 8.dp)) {
-                Text("Delete model (${mb(model.sizeBytes)})")
-            }
-        }
-        is ModelDownloader.State.Downloading -> Column(m) {
-            Text("Downloading ${model.label}", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            LinearProgressIndicator(
-                progress = { s.bytes.toFloat() / s.total },
-                modifier = Modifier.fillMaxWidth(),
-                color = DotTheme.extra.accent,
-                strokeCap = StrokeCap.Round,
-            )
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "${mb(s.bytes)} of ${mb(s.total)} · keep the app open",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { c.pauseDescriberDownload() }) { Text("Pause") }
-            }
-        }
-        ModelDownloader.State.Verifying -> Column(m) {
-            Text("Checking the download…", style = MaterialTheme.typography.titleMedium)
-        }
-        is ModelDownloader.State.Failed -> Column(m) {
-            Text("Photo descriptions", style = MaterialTheme.typography.titleMedium)
-            Text(
-                if (s.bytes > 0) "${s.message} · ${mb(s.bytes)} of ${mb(model.sizeBytes)} downloaded" else s.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            DotOutlinedButton(if (s.bytes > 0) "Resume download" else "Try again", onClick = { c.downloadDescriber() }, icon = Icons.Rounded.Download)
-        }
-        ModelDownloader.State.Missing -> Column(m) {
-            Text("Photo descriptions", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "A sentence about each photo (\"Two people on a beach at sunset\"), written on this phone, so you can search what's " +
-                    "in your photos. One-time download of ${mb(model.sizeBytes)} (Wi-Fi recommended), saved in Download/AI Models. " +
-                    "Older photos are described while charging. Nothing is uploaded.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            DotPrimaryButton("Download model", onClick = { c.downloadDescriber() }, icon = Icons.Rounded.Download, accent = true)
-        }
+    var retired by remember { mutableStateOf(SharedModel.retiredFiles(ctx)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { retired = SharedModel.retiredFiles(ctx) }
+    SettingsRow(
+        title = "AI descriptions",
+        subtitle = "${counts.first} photos described" + (if (counts.second > 0) ", ${counts.second} waiting" else "") +
+            ". ${model.label} runs on this phone; the model is in ${model.location() ?: "app storage"} (${mb(model.sizeBytes)}).",
+        icon = Icons.Rounded.AutoAwesome,
+        onClick = {},
+    )
+    if (retired.isNotEmpty()) {
+        val bytes = retired.sumOf { it.first.length() }
+        SettingsRow(
+            title = "Delete old AI models",
+            subtitle = "${retired.map { it.second }.distinct().joinToString()} · ${mb(bytes)} no longer used.",
+            icon = Icons.Rounded.DeleteSweep,
+            onClick = {
+                retired.forEach { runCatching { it.first.delete() } }
+                retired = SharedModel.retiredFiles(ctx)
+                ctx.toast("Deleted")
+            },
+        )
     }
 }

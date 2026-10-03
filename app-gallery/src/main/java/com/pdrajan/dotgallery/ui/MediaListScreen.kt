@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CallMerge
+import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.PhotoLibrary
@@ -33,7 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pdrajan.dot.design.DotEmptyState
 import com.pdrajan.dot.design.DotLargeTitle
-import com.pdrajan.dot.engine.PhotoTags
 import com.pdrajan.dotgallery.data.Media
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -51,7 +51,7 @@ fun MediaListScreen(kind: String, arg: String, nav: GalleryNav) {
         when (kind) {
             ListKind.ALBUM -> c.repo.observeAlbum(id)
             ListKind.FOLDER -> c.repo.observeFolder(id)
-            ListKind.TAG -> c.repo.observeTag(arg)
+            ListKind.KEYWORD -> c.repo.observeKeyword(arg)
             ListKind.PERSON -> c.repo.observePerson(id)
             ListKind.FAVORITES -> c.repo.observeFavorites()
             ListKind.VIDEOS -> c.repo.observeVideos()
@@ -67,7 +67,7 @@ fun MediaListScreen(kind: String, arg: String, nav: GalleryNav) {
         when (kind) {
             ListKind.ALBUM -> c.repo.observeAlbumName(id).map { it ?: "Album" }
             ListKind.FOLDER -> c.repo.observeFolders().map { list -> list.firstOrNull { it.id == id }?.name ?: "Folder" }
-            ListKind.TAG -> flowOf(PhotoTags.byId(arg)?.label ?: arg)
+            ListKind.KEYWORD -> flowOf(arg.replaceFirstChar { it.uppercase() })
             ListKind.PERSON -> c.repo.observePersonSummary(id).map { it?.name ?: "Add a name" }
             ListKind.FAVORITES -> flowOf("Favourites")
             ListKind.VIDEOS -> flowOf("Videos")
@@ -85,6 +85,8 @@ fun MediaListScreen(kind: String, arg: String, nav: GalleryNav) {
     val people by remember { c.repo.observePeople(includeHidden = true) }.collectAsStateWithLifecycle(emptyList())
     val columns by c.settings.columns.collectAsStateWithLifecycle()
     var selection by remember { mutableStateOf(emptySet<Long>()) }
+    var selecting by remember { mutableStateOf(false) }
+    val onSelection: (Set<Long>) -> Unit = { selection = it; if (it.isEmpty()) selecting = false }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var merging by remember { mutableStateOf(false) }
@@ -93,12 +95,14 @@ fun MediaListScreen(kind: String, arg: String, nav: GalleryNav) {
     SelectionScaffold(
         items = items,
         selection = selection,
-        onSelectionChange = { selection = it },
+        onSelectionChange = onSelection,
+        selecting = selecting,
         topBar = {
             TopAppBar(
                 title = {},
                 navigationIcon = { IconButton(onClick = { nav.back() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                 actions = {
+                    if (items.isNotEmpty()) IconButton(onClick = { selecting = true }) { Icon(Icons.Rounded.Checklist, "Select") }
                     when (kind) {
                         ListKind.ALBUM -> {
                             IconButton(onClick = { renaming = true }) { Icon(Icons.Rounded.DriveFileRenameOutline, "Rename album") }
@@ -122,7 +126,7 @@ fun MediaListScreen(kind: String, arg: String, nav: GalleryNav) {
                 IconButton(onClick = {
                     val ids = selection
                     scope.launch { c.repo.removeFromAlbum(id, ids) }
-                    selection = emptySet()
+                    onSelection(emptySet())
                 }) { Icon(Icons.Rounded.RemoveCircleOutline, "Remove from album") }
             }
         },
@@ -132,10 +136,11 @@ fun MediaListScreen(kind: String, arg: String, nav: GalleryNav) {
             columns = columns,
             onColumnsChange = c.settings::setColumns,
             selection = selection,
-            onSelectionChange = { selection = it },
+            onSelectionChange = onSelection,
             onOpen = { m -> nav.viewer(items.map { it.id }, m.id) },
             contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp),
             grouped = grouped,
+            selecting = selecting,
         ) {
             item(key = "title", span = { GridItemSpan(maxLineSpan) }) {
                 Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) {

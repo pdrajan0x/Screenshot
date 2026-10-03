@@ -12,6 +12,40 @@ object FtsQuery {
         WORD.findAll(TextNormalizer.basicClean(query).lowercase()).map { it.value }.toList()
 
     /**
+     * Whole-word FTS4 MATCH expression: every term must appear as a word, in singular or plural
+     * ("car" finds "cars" but not "cart" or "carpet"). Null when the query has no searchable words.
+     */
+    fun words(query: String): String? {
+        val t = terms(query)
+        if (t.isEmpty()) return null
+        return t.joinToString(" ") { term -> forms(term).joinToString(" OR ") }
+    }
+
+    /** How often the query's terms appear in [text] as whole words (singular or plural), for ranking. */
+    fun wordHits(text: String, terms: List<String>): Int {
+        if (terms.isEmpty()) return 0
+        val wanted = terms.associateWith { forms(it).toSet() }
+        var hits = 0
+        WORD.findAll(text.lowercase()).forEach { w -> wanted.values.forEach { f -> if (w.value in f) hits++ } }
+        return hits
+    }
+
+    /** The word and its simple singular/plural partner. */
+    internal fun forms(term: String): List<String> {
+        if (term.length < 3 || term.any { it.isDigit() }) return listOf(term)
+        val other = when {
+            term.endsWith("ies") && term.length > 4 -> term.dropLast(3) + "y"
+            term.endsWith("ches") || term.endsWith("shes") || term.endsWith("xes") || term.endsWith("sses") -> term.dropLast(2)
+            term.endsWith("ss") -> term + "es"
+            term.endsWith("s") -> term.dropLast(1)
+            term.endsWith("y") && term.length > 3 && term[term.length - 2] !in "aeiou" -> term.dropLast(1) + "ies"
+            term.endsWith("ch") || term.endsWith("sh") || term.endsWith("x") -> term + "es"
+            else -> term + "s"
+        }
+        return listOf(term, other).distinct()
+    }
+
+    /**
      * SQLite FTS4 MATCH expression: every term must appear, last term as a prefix (search-as-you-type).
      * Returns null when the query has no searchable words.
      */

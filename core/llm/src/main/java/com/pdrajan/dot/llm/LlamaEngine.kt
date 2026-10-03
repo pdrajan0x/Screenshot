@@ -23,7 +23,15 @@ object LlamaNative {
     /** Loads a vision projector (mmproj) for the loaded model; [maxImageTokens] > 0 caps tokens per image. */
     @JvmStatic external fun nativeLoadVision(handle: Long, mmprojPath: String, nThreads: Int, maxImageTokens: Int): Boolean
     /** Answers [instruction] about an RGB image (3 bytes per pixel, row by row). */
-    @JvmStatic external fun nativeDescribe(handle: Long, rgb: ByteArray, width: Int, height: Int, instruction: ByteArray, maxTokens: Int): ByteArray?
+    @JvmStatic external fun nativeDescribe(
+        handle: Long,
+        rgb: ByteArray,
+        width: Int,
+        height: Int,
+        instruction: ByteArray,
+        grammar: ByteArray?,
+        maxTokens: Int,
+    ): ByteArray?
     @JvmStatic external fun nativeLastError(handle: Long): String
     @JvmStatic external fun nativeCancel(handle: Long)
     @JvmStatic external fun nativeFree(handle: Long)
@@ -56,11 +64,14 @@ class LlamaEngine private constructor(handle: Long) : Closeable {
         h != 0L && LlamaNative.nativeLoadVision(h, mmproj.absolutePath, threads, maxImageTokens)
     }
 
-    /** Blocking; run off the main thread. Answers [instruction] about an RGB image ([width] x [height]). */
-    fun describe(rgb: ByteArray, width: Int, height: Int, instruction: String, maxTokens: Int = 60): String = synchronized(lock) {
+    /**
+     * Blocking; run off the main thread. Answers [instruction] about an RGB image ([width] x
+     * [height]); [grammar] is GBNF constraining the answer.
+     */
+    fun describe(rgb: ByteArray, width: Int, height: Int, instruction: String, grammar: String? = null, maxTokens: Int = 60): String = synchronized(lock) {
         val h = handle
         if (h == 0L) throw LlmException("model closed")
-        val out = LlamaNative.nativeDescribe(h, rgb, width, height, instruction.toByteArray(), maxTokens)
+        val out = LlamaNative.nativeDescribe(h, rgb, width, height, instruction.toByteArray(), grammar?.toByteArray(), maxTokens)
             ?: throw LlmException(LlamaNative.nativeLastError(h))
         String(out, Charsets.UTF_8)
     }

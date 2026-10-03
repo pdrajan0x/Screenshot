@@ -217,8 +217,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val terms = FtsQuery.terms(query)
         if (terms.isEmpty()) return@withContext TextMatches(emptyList(), emptyList())
         val rows = ArrayList<Triple<Long, String, String>>()
-        val match = FtsQuery.build(query)
-        if (match != null) {
+        fun fts(match: String?) {
+            if (match == null) return
             try {
                 db.rawQuery(
                     "SELECT docid, ocr_text || ' ' || app || ' ' || title || ' ' || summary || ' ' || tags, note " +
@@ -231,6 +231,10 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 // Odd input the FTS parser rejects; the substring fallback below still runs.
             }
         }
+        // Whole words ("car", "cars"; not "cart" or "Oscar"); word beginnings only when nothing matches.
+        fts(FtsQuery.words(query))
+        val whole = rows.isNotEmpty()
+        if (!whole) fts(FtsQuery.build(query))
         if (rows.isEmpty()) {
             val like = "%" + query.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             db.rawQuery(
@@ -241,7 +245,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 arrayOf(like, like, like, like, like, like),
             ).use { c -> while (c.moveToNext()) rows += Triple(c.getLong(0), c.getString(1), c.getString(2)) }
         }
-        fun score(text: String) = terms.sumOf { t -> occurrences(text.lowercase(), t) }
+        fun score(text: String) = if (whole) FtsQuery.wordHits(text, terms) else terms.sumOf { t -> occurrences(text.lowercase(), t) }
         val noteIds = rows.filter { (_, _, note) -> score(note) > 0 }.sortedByDescending { score(it.third) }.map { it.first }
         val ids = rows.filter { (_, text, _) -> score(text) > 0 }.sortedByDescending { score(it.second) }.map { it.first }
         TextMatches(ids, noteIds)
@@ -254,13 +258,20 @@ class ShotsRepository(private val database: ShotsDatabase) {
     }
 
     /** CLIP text→image hits, already thresholded. Loads the text encoder on first use. */
-    suspend fun visualSearch(query: String, clip: ClipModel): List<VectorHit> = withContext(Dispatchers.Default) {
+    suspend fun visualSearch(query: String, clip: ClipModel, filter: ((Long) -> Boolean)? = null): List<VectorHit> = withContext(Dispatchers.Default) {
         ensureVectors()
         if (vectorIndex.size == 0) return@withContext emptyList()
         val q = clip.embedQuery(query)
         // Screens share a lot of layout, so a merely similar-looking one (a shopping list for "shoes")
-        // scores higher than an unrelated photo would: a slightly higher bar than for photos.
-        HybridRanker.filterVisual(vectorIndex.search(q, 150), floor = 0.20f)
+        // scores higher than an unrelated photo would: a higher bar than for photos.
+        HybridRanker.filterVisual(vectorIndex.search(q, 150, filter), floor = 0.22f, dropFromTop = 0.04f, max = 40)
+    }
+
+    /** Ids the AI has summarised: search trusts what it wrote over look-alike matching. */
+    suspend fun summarizedIds(): Set<Long> = withContext(Dispatchers.IO) {
+        db.rawQuery("SELECT id FROM shots WHERE summary_state = ?", arrayOf(SUMMARY_DONE.toString())).use { c ->
+            buildSet { while (c.moveToNext()) add(c.getLong(0)) }
+        }
     }
 
     suspend fun similar(id: Long, limit: Int = 12): List<Long> = withContext(Dispatchers.Default) {
@@ -486,24 +497,31 @@ class ShotsRepository(private val database: ShotsDatabase) {
     suspend fun summaryQueue(limit: Int, since: Long = 0L): List<SummaryJob> = withContext(Dispatchers.IO) {
         db.rawQuery(
             // A shaky guess of the app would only mislead the summary.
-            "SELECT id, CASE WHEN app_source = 'guess' AND COALESCE(app_confidence, 0) < 0.6 THEN NULL ELSE app END, " +
-                "COALESCE(ocr_text,''), name FROM shots WHERE state = ? AND summary_state = ? AND taken_at >= ? " +
+            "SELECT id, uri, CASE WHEN app_source IN ('usage', 'file', 'user') OR COALESCE(app_confidence, 0) >= 0.6 THEN app END, " +
+                "COALESCE(ocr_text,''), name FROM shots WHERE state = ? AND summary_state = ? AND ocr_pending = 0 AND taken_at >= ? " +
                 "ORDER BY taken_at DESC LIMIT ?",
             arrayOf(IndexState.INDEXED.code.toString(), SUMMARY_PENDING.toString(), since.toString(), limit.toString()),
-        ).use { c -> buildList { while (c.moveToNext()) add(SummaryJob(c.getLong(0), c.getString(1), c.getString(2), c.getString(3))) } }
+        ).use { c ->
+            buildList { while (c.moveToNext()) add(SummaryJob(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getString(3), c.getString(4))) }
+        }
     }
 
-    suspend fun saveSummary(id: Long, summary: ScreenshotSummary, guessedApp: String?) = withContext(Dispatchers.IO) {
+    /**
+     * Stores what the vision model wrote. The app it named is kept as one more signal for the app
+     * guess: an uncertain app is guessed again with it (see [guessTargets]).
+     */
+    suspend fun saveSummary(id: Long, summary: ScreenshotSummary) = withContext(Dispatchers.IO) {
         db.beginTransaction()
         try {
             db.update("shots", ContentValues().apply {
                 put("title", summary.title.ifBlank { null })
                 put("summary", summary.summary.ifBlank { null })
                 put("tags", summary.tags.joinToString(", ").ifEmpty { null })
+                put("model_app", summary.app)
                 put("summary_state", SUMMARY_DONE)
             }, "id = ?", arrayOf(id.toString()))
-            if (guessedApp != null) {
-                db.execSQL("UPDATE shots SET app = ?, app_source = 'model' WHERE id = ? AND app IS NULL", arrayOf<Any>(guessedApp, id))
+            if (summary.app != null) {
+                db.execSQL("UPDATE shots SET app_confidence = NULL WHERE id = ? AND $UNCERTAIN_APP", arrayOf<Any>(id))
             }
             rewriteFts(id)
             db.setTransactionSuccessful()
@@ -511,22 +529,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
             db.endTransaction()
         }
         changed()
-    }
-
-    /** Marks screenshots with less than [minChars] of text as summarised, without a summary. Returns how many. */
-    suspend fun skipTextless(minChars: Int): Int = withContext(Dispatchers.IO) {
-        val n = db.compileStatement(
-            "UPDATE shots SET summary_state = ? WHERE state = ? AND summary_state = ? AND ocr_pending = 0 " +
-                "AND LENGTH(TRIM(COALESCE(ocr_text, ''))) < ?",
-        ).use { st ->
-            st.bindLong(1, SUMMARY_DONE.toLong())
-            st.bindLong(2, IndexState.INDEXED.code.toLong())
-            st.bindLong(3, SUMMARY_PENDING.toLong())
-            st.bindLong(4, minChars.toLong())
-            st.executeUpdateDelete()
-        }
-        if (n > 0) changed()
-        n
     }
 
     suspend fun markSummaryFailed(id: Long) = withContext(Dispatchers.IO) {
@@ -588,7 +590,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
         }
     }
 
-    class GuessTarget(val id: Long, val takenAt: Long, val text: String, val crops: List<FloatArray>)
+    class GuessTarget(val id: Long, val takenAt: Long, val text: String, val crops: List<FloatArray>, val modelApp: String?)
 
     /**
      * Indexed screenshots whose app isn't certain, by id after [afterId]. With [all] false only
@@ -598,14 +600,14 @@ class ShotsRepository(private val database: ShotsDatabase) {
         ensureVectors()
         return withContext(Dispatchers.IO) {
             db.rawQuery(
-                "SELECT id, taken_at, COALESCE(ocr_text, '') FROM shots WHERE state = ? AND id > ? AND $UNCERTAIN_APP" +
+                "SELECT id, taken_at, COALESCE(ocr_text, ''), model_app FROM shots WHERE state = ? AND id > ? AND $UNCERTAIN_APP" +
                     (if (all) "" else " AND app_confidence IS NULL") + " ORDER BY id LIMIT ?",
                 arrayOf(IndexState.INDEXED.code.toString(), afterId.toString(), limit.toString()),
             ).use { c ->
                 buildList {
                     while (c.moveToNext()) {
                         val id = c.getLong(0)
-                        add(GuessTarget(id, c.getLong(1), c.getString(2), vectorIndex.vectorsOf(id).orEmpty()))
+                        add(GuessTarget(id, c.getLong(1), c.getString(2), vectorIndex.vectorsOf(id).orEmpty(), c.getString(3)))
                     }
                 }
             }
@@ -663,6 +665,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
         categories = getString(9).split(',').filter { it.isNotEmpty() },
         favorite = getInt(10) == 1,
         title = getString(11),
+        summarized = getInt(12) == SUMMARY_DONE,
     )
 
     private fun Cursor.shots(): List<Shot> = buildList(count) { while (moveToNext()) add(shot()) }
@@ -672,8 +675,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
         const val SUMMARY_DONE = 1
         const val SUMMARY_FAILED = 2
 
-        private const val SHOT_COLUMNS = "id, uri, name, taken_at, width, height, size, state, app, categories, favorite, title"
-        private const val SHOT_COLUMN_COUNT = 12
+        private const val SHOT_COLUMNS = "id, uri, name, taken_at, width, height, size, state, app, categories, favorite, title, summary_state"
+        private const val SHOT_COLUMN_COUNT = 13
 
         /** Rows whose source app is a guess (or not known at all), not from usage history, file name or the user. */
         private const val UNCERTAIN_APP = "(app_source IS NULL OR app_source NOT IN ('usage', 'file', 'user'))"

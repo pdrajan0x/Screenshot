@@ -44,7 +44,8 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
                 summary TEXT,
                 tags TEXT,
                 summary_state INTEGER NOT NULL DEFAULT 0,
-                app_confidence REAL
+                app_confidence REAL,
+                model_app TEXT
             )
             """.trimIndent(),
         )
@@ -75,6 +76,13 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
         }
         // How sure a guessed source app is (null when it is certain).
         if (oldVersion < 4) db.execSQL("ALTER TABLE shots ADD COLUMN app_confidence REAL")
+        if (oldVersion < 5) {
+            // The app the vision model named, one signal for the app guess.
+            db.execSQL("ALTER TABLE shots ADD COLUMN model_app TEXT")
+            // Summaries now come from the vision model (it sees the screen, not only its text): redo them all.
+            // The old ones stay visible until then.
+            db.execSQL("UPDATE shots SET summary_state = 0")
+        }
     }
 
     private fun createFts(db: SQLiteDatabase) {
@@ -83,7 +91,7 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
 
     companion object {
         const val NAME = "shots.db"
-        const val VERSION = 4
+        const val VERSION = 5
 
         /** Full-text columns, and the shots expressions that fill them (same order). */
         const val FTS_COLUMNS = "ocr_text, note, app, title, summary, tags"

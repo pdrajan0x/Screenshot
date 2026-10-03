@@ -38,50 +38,76 @@ data class ModelSpec(
 )
 
 object Models {
-    /** Qwen3 1.7B, 4-bit (Q4_0 runs fastest on ARM: llama.cpp repacks it for dot-product/i8mm cores). */
-    val SUMMARY = ModelSpec(
-        id = "qwen3-1.7b-q4_0",
-        label = "Qwen3 1.7B",
-        fileName = "Qwen3-1.7B-Q4_0.gguf",
-        sizeBytes = 1_056_782_912L,
-        sha256 = "c876f159707a4e4f70e045106c69db15bfc935a4981706fd4f65c6e7ea1e81c5",
+    /**
+     * LFM2.5-VL 1.6B (Liquid AI): the one model both apps use for every description, summary and
+     * keyword. Language half; [VISION_PROJECTOR] is its image encoder.
+     */
+    val VISION_TEXT = ModelSpec(
+        id = "lfm2.5-vl-1.6b-q4_0",
+        label = "LFM2.5-VL 1.6B",
+        fileName = "LFM2.5-VL-1.6B-Q4_0.gguf",
+        sizeBytes = 695_752_480L,
+        sha256 = "8186364a4e7c3ad30f6dd3d3b7a4e0074c77dd91eed6cad5d8be9090ce285804",
         urls = listOf(
-            "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_0.gguf",
-            "https://github.com/pdrajan0x/Screenshot/releases/download/llm-models-v1/Qwen3-1.7B-Q4_0.gguf",
+            "https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B-GGUF/resolve/main/LFM2.5-VL-1.6B-Q4_0.gguf",
+            "https://github.com/pdrajan0x/Screenshot/releases/download/vlm-models-v1/LFM2.5-VL-1.6B-Q4_0.gguf",
         ),
-        thinking = true,
+        thinking = false,
     )
+
+    /** Its vision encoder and projector (mmproj): turns an image into tokens for [VISION_TEXT]. */
+    val VISION_PROJECTOR = ModelSpec(
+        id = "lfm2.5-vl-1.6b-mmproj-q8_0",
+        label = "LFM2.5-VL 1.6B vision",
+        fileName = "mmproj-LFM2.5-VL-1.6b-Q8_0.gguf",
+        sizeBytes = 583_109_888L,
+        sha256 = "2ce89e610c56f3198ece2b86cf61743a08b9307279c89125eb2412ebb908689d",
+        urls = listOf(
+            "https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B-GGUF/resolve/main/mmproj-LFM2.5-VL-1.6b-Q8_0.gguf",
+            "https://github.com/pdrajan0x/Screenshot/releases/download/vlm-models-v1/mmproj-LFM2.5-VL-1.6b-Q8_0.gguf",
+        ),
+        thinking = false,
+    )
+
+    /** Models earlier versions downloaded and nothing uses any more (offered for deletion). */
+    val RETIRED = listOf(
+        "Qwen3-1.7B-Q4_0.gguf" to "summary model (Qwen3 1.7B)",
+        "LFM2.5-VL-450M-Q4_0.gguf" to "photo model (LFM2.5-VL 450M)",
+        "mmproj-LFM2.5-VL-450m-Q8_0.gguf" to "photo model (LFM2.5-VL 450M)",
+    )
+}
+
+/** The shared AI model (both apps), and access to copies another app downloaded. */
+object SharedModel {
+
+    fun bundle(context: Context) = ModelBundle(context, Models.VISION_TEXT.label, listOf(Models.VISION_TEXT, Models.VISION_PROJECTOR))
 
     /**
-     * LFM2.5-VL 450M (Liquid AI), the language half of the photo describer: small and fast enough to
-     * describe a photo in a couple of seconds on a phone CPU.
+     * Whether this app may read files other apps put in Download/AI Models ("All files access"):
+     * with it, a model Dot Gallery downloaded is used by Dot Screenshots too, and the other way round.
      */
-    val PHOTO_TEXT = ModelSpec(
-        id = "lfm2.5-vl-450m-q4_0",
-        label = "LFM2.5-VL 450M",
-        fileName = "LFM2.5-VL-450M-Q4_0.gguf",
-        sizeBytes = 219_311_264L,
-        sha256 = "6d2757dd0f0b98aea7dc90477bb5b3a0df1089be85ef92943f8cecb05121ccbf",
-        urls = listOf(
-            "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/LFM2.5-VL-450M-Q4_0.gguf",
-            "https://github.com/pdrajan0x/Screenshot/releases/download/vlm-models-v1/LFM2.5-VL-450M-Q4_0.gguf",
-        ),
-        thinking = false,
-    )
+    fun canReadOtherAppsFiles(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
 
-    /** Its vision encoder and projector (mmproj): turns a photo into tokens for [PHOTO_TEXT]. */
-    val PHOTO_VISION = ModelSpec(
-        id = "lfm2.5-vl-450m-mmproj-q8_0",
-        label = "LFM2.5-VL 450M vision",
-        fileName = "mmproj-LFM2.5-VL-450m-Q8_0.gguf",
-        sizeBytes = 102_815_168L,
-        sha256 = "ebfc428baa37efad8bae93864f914b2634a09009f91ad59f974fe1a1565d8561",
-        urls = listOf(
-            "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-LFM2.5-VL-450m-Q8_0.gguf",
-            "https://github.com/pdrajan0x/Screenshot/releases/download/vlm-models-v1/mmproj-LFM2.5-VL-450m-Q8_0.gguf",
-        ),
-        thinking = false,
-    )
+    /** The system screen where the user grants "All files access" to this app (Android 11+). */
+    fun allFilesAccessIntent(context: Context): Intent =
+        Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.fromParts("package", context.packageName, null))
+
+    /** Old model files still on the phone that this app can delete: (file, what it was). */
+    fun retiredFiles(context: Context): List<Pair<File, String>> {
+        val dirs = listOfNotNull(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                @Suppress("DEPRECATION")
+                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), ModelDownloader.SHARED_FOLDER)
+            } else {
+                null
+            },
+            File(context.filesDir, "models"),
+        )
+        return dirs.flatMap { dir ->
+            Models.RETIRED.mapNotNull { (name, label) -> File(dir, name).takeIf { runCatching { it.isFile && it.canWrite() }.getOrDefault(false) }?.let { it to label } }
+        }
+    }
 }
 
 /** Where a ready model lives. */
@@ -114,7 +140,7 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
     private val privateDir = File(context.filesDir, "models")
 
     /** Download/AI Models, or null where apps can't write to shared storage without a permission. */
-    @Suppress("DEPRECATION") // Plain file access to Download is allowed again from Android 11 for files the app creates.
+    @Suppress("DEPRECATION") // Plain file access to Download works from Android 11 for the app's own files (and all, with All files access).
     val sharedDir: File? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), SHARED_FOLDER)
@@ -320,42 +346,6 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
             } catch (e: Exception) {
                 DotLog.w("llm: could not use the picked file", e)
                 _state.value = State.Failed("Couldn't read that file: ${e.message}", partialBytes())
-            }
-        }
-    }
-
-    /**
-     * Moves a model downloaded by an older version (into app storage) to the shared folder. It
-     * stays usable throughout; the old copy is removed once the new one is complete.
-     */
-    suspend fun migrateToShared() = withContext(Dispatchers.IO) {
-        lock.withLock {
-            val old = File(privateDir, spec.fileName)
-            val shared = sharedDir ?: return@withLock
-            if (!complete(old)) return@withLock
-            val now = current
-            if (now !is ModelSource.Local || now.file != old) {
-                // Something else is in use: the private copy is just taking space.
-                old.delete()
-                return@withLock
-            }
-            val dir = downloadDir()
-            if (dir != shared || dir.usableSpace < spec.sizeBytes + 200_000_000L) return@withLock
-            val part = partIn(dir)
-            try {
-                old.inputStream().use { input -> FileOutputStream(part).use { input.copyTo(it, 1 shl 20) } }
-                if (part.length() != spec.sizeBytes) throw IOException("copy incomplete")
-                val file = moveIntoPlace(part)
-                prefs.edit().putString(KEY_PATH + spec.id, file.absolutePath).apply()
-                current = ModelSource.Local(file)
-                old.delete()
-                DotLog.i("llm: model moved to ${file.parent}")
-            } catch (e: CancellationException) {
-                part.delete()
-                throw e
-            } catch (e: Exception) {
-                part.delete()
-                DotLog.w("llm: could not move the model to the shared folder", e)
             }
         }
     }

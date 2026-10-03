@@ -81,7 +81,7 @@ class AppIdentification(
             if (batch.isEmpty()) break
             val results = withContext(Dispatchers.Default) {
                 batch.mapNotNull { t ->
-                    identifier.identify(t.text, t.crops, t.takenAt)?.let { t.id to it }
+                    identifier.identify(t.text, t.crops, t.takenAt, t.modelApp)?.let { t.id to it }
                 }
             }
             moved += repo.saveGuesses(results)

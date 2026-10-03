@@ -304,10 +304,11 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeLoadVision(JNIEnv *env, jclass, jlong
 }
 
 // Answers [jinstruction] about an RGB image ([w] x [h], 3 bytes per pixel) using the model's own
-// chat template. Returns the UTF-8 answer, or null on failure (see nativeLastError).
+// chat template, optionally constrained by a GBNF [jgrammar]. Returns the UTF-8 answer, or null on
+// failure (see nativeLastError).
 JNIEXPORT jbyteArray JNICALL
 Java_com_pdrajan_dot_llm_LlamaNative_nativeDescribe(JNIEnv *env, jclass, jlong handle, jbyteArray jrgb, jint w, jint h,
-                                                     jbyteArray jinstruction, jint max_tokens) {
+                                                     jbyteArray jinstruction, jbyteArray jgrammar, jint max_tokens) {
     auto *engine = reinterpret_cast<Engine *>(handle);
     engine->cancel = false;
     engine->last_error.clear();
@@ -352,10 +353,12 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeDescribe(JNIEnv *env, jclass, jlong h
         if (mtmd_helper_eval_chunks(engine->vision, engine->ctx, chunks, 0, 0, engine->n_batch, true, &n_past) != 0) {
             engine->last_error = "image decode failed";
         } else {
-            llama_sampler *smpl = make_sampler(engine, "", 0.0f, 0);
-            const std::string out = sample_loop(engine, smpl, max_tokens, false);
-            llama_sampler_free(smpl);
-            if (engine->last_error != "cancelled") result = to_bytes(env, out);
+            llama_sampler *smpl = make_sampler(engine, to_string(env, jgrammar), 0.0f, 0);
+            if (smpl != nullptr) {
+                const std::string out = sample_loop(engine, smpl, max_tokens, false);
+                llama_sampler_free(smpl);
+                if (engine->last_error != "cancelled") result = to_bytes(env, out);
+            }
         }
         reset_cache(engine);
     }

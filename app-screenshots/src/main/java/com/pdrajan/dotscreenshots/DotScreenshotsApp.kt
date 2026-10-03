@@ -2,7 +2,6 @@ package com.pdrajan.dotscreenshots
 
 import android.app.Application
 import android.content.Context
-import android.net.Uri
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -12,8 +11,7 @@ import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import com.pdrajan.dot.design.CrashLog
-import com.pdrajan.dot.llm.ModelDownloader
-import com.pdrajan.dot.llm.Models
+import com.pdrajan.dot.llm.SharedModel
 import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaStoreSource
 import com.pdrajan.dotscreenshots.data.Settings
@@ -75,21 +73,18 @@ class AppContainer(val context: Context) {
     val repo = ShotsRepository(ShotsDatabase(context))
     val media = MediaStoreSource(context)
     val hub = ModelHub(context, scope)
-    val power = PowerGate(context)
+    val power = PowerGate(context) { settings.processing.value }
 
     /** The app is on screen (between onStart and onStop). */
     @Volatile var visible = false
 
     // Library-wide passes (re-guessing every screenshot's app) wait until the app is open or charging.
     val engine = IndexEngine(context, repo, settings, hub, media) { visible || power.isCharging }
-    val scheduler = IndexScheduler(context) { settings.backlogWhileCharging.value }
-    val modelDownload = ModelDownloader(context, Models.SUMMARY)
-    val summaries = SummaryEngine(context, repo, settings, modelDownload, power, scope)
+    val scheduler = IndexScheduler(context) { !settings.processing.value.onBattery }
 
-    init {
-        // Earlier versions kept the model in app storage; it now lives in Download/AI Models.
-        scope.launch { modelDownload.migrateToShared() }
-    }
+    /** The AI model both Dot apps share (Download/AI Models): titles, summaries, keywords, app names. */
+    val model = SharedModel.bundle(context)
+    val summaries = SummaryEngine(context, repo, model, power, scope)
 
     /** Ids of the last search's results, so the viewer can swipe through them. */
     @Volatile var lastSearchIds: List<Long> = emptyList()
@@ -102,31 +97,29 @@ class AppContainer(val context: Context) {
     private var downloadJob: Job? = null
 
     /**
-     * App opened: read new screenshots right away. With the phone charging (or processing on
-     * battery allowed) keep going through the backlog and the summaries; on battery only the
-     * newest screenshots get summaries.
+     * App opened: read new screenshots right away (quick). The AI summaries, and the older
+     * screenshots, follow Settings → Processing.
      */
     fun onForeground() {
         foregroundJob?.cancel()
         foregroundJob = scope.launch {
-            modelDownload.refresh()
+            model.refresh()
             runCatching { engine.sync() }
-            while (isActive && engine.process(limit = FOREGROUND_BATCH) > 0 && unrestricted()) Unit
-            if (unrestricted()) {
-                while (isActive && summaries.process(limit = SUMMARY_BATCH) > 0 && unrestricted()) Unit
-            } else {
-                // On battery only the newest few, and only when PowerGate allows.
-                summaries.process(limit = 3, since = System.currentTimeMillis() - RECENT_MILLIS)
+            engine.process(limit = FOREGROUND_BATCH)
+            while (isActive && allowed() && engine.process(limit = FOREGROUND_BATCH) > 0) Unit
+            var summarised = 0
+            while (isActive) {
+                val n = summaries.process(limit = SUMMARY_BATCH)
+                if (n == 0) break
+                summarised += n
             }
-            if (repo.counts().pending > 0) {
-                scheduler.scheduleBacklog()
-            } else if (summaries.available && repo.summaryCounts().waiting > 0) {
-                scheduler.scheduleBacklog(requireCharging = true)
-            }
+            if (summarised > 0) engine.apps.run()
+            val left = repo.counts().pending > 0 || (summaries.available && repo.summaryCounts().waiting > 0)
+            if (left && settings.processing.value.background) scheduler.scheduleBacklog()
         }
     }
 
-    private fun unrestricted() = power.isCharging || !settings.backlogWhileCharging.value
+    private fun allowed() = power.blocker() == null
 
     /** Left the app: work started from the screen stops (even "Process now"), unless the phone is charging. */
     fun onBackground() {
@@ -143,6 +136,7 @@ class AppContainer(val context: Context) {
                 runCatching { engine.sync() }
                 while (isActive && engine.process(limit = 50) > 0) Unit
                 while (isActive && summaries.process(limit = SUMMARY_BATCH, userAsked = true) > 0) Unit
+                engine.apps.run()
             } finally {
                 _backlogRunning.value = false
             }
@@ -154,12 +148,12 @@ class AppContainer(val context: Context) {
         _backlogRunning.value = false
     }
 
-    /** Downloads the summary model (about 1 GB, resumable), then starts summarising. */
+    /** Downloads the AI model (about 1.3 GB, resumable), then starts summarising. */
     fun downloadModel() {
         if (downloadJob?.isActive == true) return
         downloadJob = scope.launch {
-            modelDownload.download()
-            if (modelDownload.isReady()) onForeground()
+            model.download()
+            if (model.isReady()) onForeground()
         }
     }
 
@@ -175,26 +169,8 @@ class AppContainer(val context: Context) {
         }
     }
 
-    /** Uses a copy of the model that is already on the phone (picked in the file picker). */
-    fun useModelFile(uri: Uri) {
-        if (downloadJob?.isActive == true) return
-        downloadJob = scope.launch {
-            modelDownload.adopt(uri)
-            if (modelDownload.isReady()) onForeground()
-        }
-    }
-
-    fun deleteModel() {
-        downloadJob?.cancel()
-        scope.launch {
-            summaries.unload()
-            modelDownload.delete()
-        }
-    }
-
     private companion object {
         const val FOREGROUND_BATCH = 60
         const val SUMMARY_BATCH = 10
-        const val RECENT_MILLIS = 2L * 24 * 60 * 60_000
     }
 }

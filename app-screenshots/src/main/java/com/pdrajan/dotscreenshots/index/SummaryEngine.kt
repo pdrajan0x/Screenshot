@@ -1,14 +1,13 @@
 package com.pdrajan.dotscreenshots.index
 
 import android.content.Context
-import com.pdrajan.dot.engine.AppRecognizer
 import com.pdrajan.dot.engine.SummaryParser
-import com.pdrajan.dot.engine.SummaryPrompt
+import com.pdrajan.dot.engine.VisionPrompts
 import com.pdrajan.dot.llm.LlamaEngine
-import com.pdrajan.dot.llm.ModelDownloader
+import com.pdrajan.dot.llm.ModelBundle
 import com.pdrajan.dot.llm.PowerGate
 import com.pdrajan.dot.media.DotLog
-import com.pdrajan.dotscreenshots.data.Settings
+import com.pdrajan.dot.ml.RgbImage
 import com.pdrajan.dotscreenshots.data.ShotsRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -28,15 +27,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Titles, summaries and keywords from the on-device language model (Qwen3 1.7B via llama.cpp),
- * written after a screenshot's text has been read. The model is loaded on demand and released
- * a minute after the last summary.
+ * Titles, summaries, keywords and the app's name from the on-device vision model both Dot apps
+ * share (LFM2.5-VL 1.6B via llama.cpp). It sees the screenshot itself plus the text read from it.
+ * The model is loaded on demand and released a minute after the last screenshot.
  */
 class SummaryEngine(
     private val context: Context,
     private val repo: ShotsRepository,
-    private val settings: Settings,
-    val downloader: ModelDownloader,
+    val model: ModelBundle,
     private val power: PowerGate,
     private val scope: CoroutineScope,
 ) {
@@ -48,25 +46,24 @@ class SummaryEngine(
     private val _progress = MutableStateFlow(IndexProgress())
     val progress: StateFlow<IndexProgress> = _progress.asStateFlow()
 
-    /** The model is downloaded and summaries are switched on. */
-    val available: Boolean get() = settings.summariesEnabled.value && downloader.isReady()
+    /** The model is downloaded. */
+    val available: Boolean get() = model.isReady()
 
     /**
      * Summarises up to [limit] screenshots taken after [since], newest first, while [PowerGate]
-     * allows ([userAsked]: the user tapped "Process now"). Returns how many summaries were written.
+     * allows ([userAsked]: the user tapped "Process now"; [foreground]: the app is open). Returns
+     * how many summaries were written.
      */
     suspend fun process(
         limit: Int,
         since: Long = 0L,
         deadline: Long = Long.MAX_VALUE,
         userAsked: Boolean = false,
+        foreground: Boolean = true,
         isStopped: () -> Boolean = { false },
     ): Int =
         lock.withLock {
-            if (!available) return 0
-            // Screenshots without text have nothing to summarise; they never wake the model.
-            repo.skipTextless(MIN_TEXT_CHARS)
-            if (blocked(userAsked)) return 0
+            if (!available || blocked(userAsked, foreground)) return 0
             val jobs = repo.summaryQueue(limit, since)
             if (jobs.isEmpty()) return 0
             releaseJob?.cancel()
@@ -75,37 +72,33 @@ class SummaryEngine(
             val started = System.currentTimeMillis()
             _progress.value = IndexProgress(running = true, total = jobs.size, preparing = engine == null)
             try {
-                val llm = engine ?: withContext(Dispatchers.IO) {
-                    downloader.source()?.let { LlamaEngine.load(context, it, threads = power.threads()) }
-                }?.also { engine = it }
-                if (llm == null) {
+                val vlm = engine ?: withContext(Dispatchers.IO) { load() }?.also { engine = it }
+                if (vlm == null) {
                     DotLog.e("summary: model could not be loaded")
-                    // Deleted from the Files app, or the picked file went away: show the download again.
-                    downloader.refresh()
+                    // Deleted from the Files app: show the download again.
+                    model.refresh()
                     return 0
                 }
                 _progress.value = IndexProgress(running = true, total = jobs.size)
                 for (job in jobs) {
-                    if (isStopped() || System.currentTimeMillis() > deadline || blocked(userAsked)) break
+                    if (isStopped() || System.currentTimeMillis() > deadline || blocked(userAsked, foreground)) break
                     currentCoroutineContext().ensureActive()
                     val itemStart = System.currentTimeMillis()
                     try {
-                        val prompt = SummaryPrompt.build(job.app, job.text, downloader.spec.thinking)
-                        val parsed = SummaryParser.parse(generate(llm, prompt))
+                        val image = withContext(Dispatchers.IO) { RgbImage.load(context.contentResolver, job.uri, MAX_SIDE) }
+                        val parsed = SummaryParser.parse(describe(vlm, image, VisionPrompts.screenshot(job.text, job.app)))
                         if (parsed == null) {
                             DotLog.w("summary: unreadable answer for ${job.name}")
                             repo.markSummaryFailed(job.id)
                         } else {
-                            // The model's app guess only counts when the screen's text backs it up.
-                            val guess = if (job.app == null) AppRecognizer.recognize(job.text, null, parsed.app)?.app else null
-                            repo.saveSummary(job.id, parsed, guess)
+                            repo.saveSummary(job.id, parsed)
                             written++
                             if (written == 1) DotLog.i("summary: first one took ${System.currentTimeMillis() - itemStart} ms")
                         }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
-                        DotLog.e("summary: failed on ${job.name}", e)
+                        DotLog.w("summary: failed on ${job.name}: ${e.javaClass.simpleName}: ${e.message}")
                         repo.markSummaryFailed(job.id)
                     }
                     done++
@@ -122,9 +115,21 @@ class SummaryEngine(
             written
         }
 
+    private fun load(): LlamaEngine? {
+        val files = model.files() ?: return null
+        val threads = power.threads()
+        // Screen text (up to 1,000 characters) plus 128 image tokens and the answer.
+        val llm = LlamaEngine.load(context, files[0], contextTokens = 2048, threads = threads) ?: return null
+        if (!llm.loadVision(files[1], threads, MAX_IMAGE_TOKENS)) {
+            llm.close()
+            return null
+        }
+        return llm
+    }
+
     /** Logs when summaries pause or resume for battery or heat (once per change, not per call). */
-    private fun blocked(userAsked: Boolean): Boolean {
-        val reason = power.blocker(userAsked)
+    private fun blocked(userAsked: Boolean, foreground: Boolean): Boolean {
+        val reason = power.blocker(userAsked, foreground)
         if (reason != lastBlocker) {
             DotLog.i(if (reason != null) "summary: paused ($reason)" else "summary: allowed again")
             lastBlocker = reason
@@ -133,12 +138,14 @@ class SummaryEngine(
     }
 
     /** Generation is a blocking native call: on cancellation, tell llama.cpp to stop right away. */
-    private suspend fun generate(llm: LlamaEngine, prompt: String): String = coroutineScope {
-        val work = async(Dispatchers.Default) { llm.generate(prompt, SummaryPrompt.GRAMMAR, MAX_TOKENS) }
+    private suspend fun describe(vlm: LlamaEngine, image: RgbImage, prompt: String): String = coroutineScope {
+        val work = async(Dispatchers.Default) {
+            vlm.describe(image.bytes, image.width, image.height, prompt, VisionPrompts.SCREENSHOT_GRAMMAR, VisionPrompts.MAX_TOKENS)
+        }
         try {
             work.await()
         } catch (e: CancellationException) {
-            llm.cancel()
+            vlm.cancel()
             throw e
         }
     }
@@ -154,14 +161,15 @@ class SummaryEngine(
         }
     }
 
-    /** After the model file is deleted. */
+    /** After the model files are deleted. */
     suspend fun unload() = lock.withLock {
         engine?.close()
         engine = null
     }
 
     private companion object {
-        const val MAX_TOKENS = 160
-        const val MIN_TEXT_CHARS = 40
+        const val MAX_SIDE = 512
+        // Enough detail to read the layout; fewer image tokens are much slower with this model.
+        const val MAX_IMAGE_TOKENS = 128
     }
 }

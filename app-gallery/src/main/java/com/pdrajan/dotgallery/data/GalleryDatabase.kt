@@ -43,7 +43,8 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, 
                 index_version INTEGER NOT NULL DEFAULT 0,
                 ocr_pending INTEGER NOT NULL DEFAULT 0,
                 caption TEXT,
-                caption_state INTEGER NOT NULL DEFAULT 0
+                caption_state INTEGER NOT NULL DEFAULT 0,
+                keywords TEXT NOT NULL DEFAULT ''
             )
             """.trimIndent(),
         )
@@ -110,9 +111,14 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE media ADD COLUMN ocr_pending INTEGER NOT NULL DEFAULT 0")
         if (oldVersion < 3) {
-            // Photo descriptions (on-device vision model), searchable: the search index is rebuilt.
             db.execSQL("ALTER TABLE media ADD COLUMN caption TEXT")
             db.execSQL("ALTER TABLE media ADD COLUMN caption_state INTEGER NOT NULL DEFAULT 0")
+        }
+        if (oldVersion < 4) {
+            // One model for everything: descriptions are redone with keywords, which are searchable
+            // instead of the old "Things" labels. The search index is rebuilt.
+            db.execSQL("ALTER TABLE media ADD COLUMN keywords TEXT NOT NULL DEFAULT ''")
+            db.execSQL("UPDATE media SET caption_state = 0")
             db.execSQL("DROP TABLE IF EXISTS media_fts")
             createFts(db)
             db.execSQL("INSERT INTO media_fts(docid, $FTS_COLUMNS) SELECT id, $FTS_SOURCE FROM media")
@@ -125,11 +131,11 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, 
 
     companion object {
         const val NAME = "gallery.db"
-        const val VERSION = 3
+        const val VERSION = 4
 
         /** Full-text columns, and the media expressions that fill them (same order). */
-        const val FTS_COLUMNS = "name, ocr_text, tags, caption"
-        const val FTS_SOURCE = "name, COALESCE(ocr_text, ''), tags, COALESCE(caption, '')"
+        const val FTS_COLUMNS = "name, ocr_text, caption, keywords"
+        const val FTS_SOURCE = "name, COALESCE(ocr_text, ''), COALESCE(caption, ''), REPLACE(keywords, ',', ' ')"
         const val INDEX_VERSION = 1
     }
 }

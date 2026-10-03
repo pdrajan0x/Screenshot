@@ -3,6 +3,7 @@ package com.pdrajan.dotscreenshots.data
 import android.content.Context
 import androidx.core.content.edit
 import com.pdrajan.dot.design.ThemeMode
+import com.pdrajan.dot.media.ProcessingPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,19 +17,12 @@ class Settings(context: Context) {
     private val _readHindi = MutableStateFlow(prefs.getBoolean(KEY_HINDI, true))
     val readHindi: StateFlow<Boolean> = _readHindi.asStateFlow()
 
-    private val _backlogWhileCharging = MutableStateFlow(prefs.getBoolean(KEY_CHARGING, true))
-    val backlogWhileCharging: StateFlow<Boolean> = _backlogWhileCharging.asStateFlow()
+    private val _processing = MutableStateFlow(ProcessingPolicy.load(prefs, KEY_CHARGING))
+    /** Settings → Processing: in the background or not, only while charging or above a battery level. */
+    val processing: StateFlow<ProcessingPolicy> = _processing.asStateFlow()
 
     private val _onboardingDone = MutableStateFlow(prefs.getBoolean(KEY_ONBOARDED, false))
     val onboardingDone: StateFlow<Boolean> = _onboardingDone.asStateFlow()
-
-    private val _summaries = MutableStateFlow(prefs.getBoolean(KEY_SUMMARIES, true))
-    /** Write AI summaries (once the model is downloaded). */
-    val summariesEnabled: StateFlow<Boolean> = _summaries.asStateFlow()
-
-    private val _tipDismissed = MutableStateFlow(prefs.getBoolean(KEY_TIP, false))
-    /** The home screen's "make search smarter" card was dismissed. */
-    val smartTipDismissed: StateFlow<Boolean> = _tipDismissed.asStateFlow()
 
     private val _gridColumns = MutableStateFlow(prefs.getInt(KEY_COLUMNS, 3))
     val gridColumns: StateFlow<Int> = _gridColumns.asStateFlow()
@@ -48,24 +42,14 @@ class Settings(context: Context) {
         _readHindi.value = enabled
     }
 
-    fun setBacklogWhileCharging(enabled: Boolean) {
-        prefs.edit { putBoolean(KEY_CHARGING, enabled) }
-        _backlogWhileCharging.value = enabled
+    fun setProcessing(policy: ProcessingPolicy) {
+        policy.save(prefs)
+        _processing.value = policy
     }
 
     fun setOnboardingDone() {
         prefs.edit { putBoolean(KEY_ONBOARDED, true) }
         _onboardingDone.value = true
-    }
-
-    fun setSummariesEnabled(enabled: Boolean) {
-        prefs.edit { putBoolean(KEY_SUMMARIES, enabled) }
-        _summaries.value = enabled
-    }
-
-    fun dismissSmartTip() {
-        prefs.edit { putBoolean(KEY_TIP, true) }
-        _tipDismissed.value = true
     }
 
     fun setGridColumns(columns: Int) {
@@ -80,7 +64,5 @@ class Settings(context: Context) {
         const val KEY_ONBOARDED = "onboarding_done"
         const val KEY_COLUMNS = "grid_columns"
         const val KEY_AVG_MS = "avg_index_ms"
-        const val KEY_SUMMARIES = "summaries"
-        const val KEY_TIP = "smart_tip_dismissed"
     }
 }

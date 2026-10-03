@@ -27,6 +27,8 @@ data class Shot(
     val favorite: Boolean,
     /** Written by the on-device summary model; null until then. */
     val title: String? = null,
+    /** The AI has summarised it (a tiny red dot on its thumbnail). */
+    val summarized: Boolean = false,
 )
 
 /** Everything the detail screen shows for one screenshot. */
@@ -53,7 +55,7 @@ data class ShotDetail(
 data class SummaryCounts(val done: Int, val waiting: Int)
 
 /** A screenshot waiting for its summary. */
-data class SummaryJob(val id: Long, val app: String?, val text: String, val name: String)
+data class SummaryJob(val id: Long, val uri: Uri, val app: String?, val text: String, val name: String)
 
 data class ShotCollection(
     val id: Long,

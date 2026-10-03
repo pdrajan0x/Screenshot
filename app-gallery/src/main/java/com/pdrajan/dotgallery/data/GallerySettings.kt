@@ -3,6 +3,7 @@ package com.pdrajan.dotgallery.data
 import android.content.Context
 import androidx.core.content.edit
 import com.pdrajan.dot.design.ThemeMode
+import com.pdrajan.dot.media.ProcessingPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,8 +25,9 @@ class GallerySettings(context: Context) {
     private val _readHindi = bool("read_hindi", true)
     val readHindi: StateFlow<Boolean> = _readHindi.asStateFlow()
 
-    private val _charging = bool("backlog_charging", true)
-    val backlogWhileCharging: StateFlow<Boolean> = _charging.asStateFlow()
+    private val _processing = MutableStateFlow(ProcessingPolicy.load(prefs, legacyChargingOnlyKey = "backlog_charging"))
+    /** When analysing and describing may run (Settings → Processing). */
+    val processing: StateFlow<ProcessingPolicy> = _processing.asStateFlow()
 
     private val _onboarded = bool("onboarded", false)
     val onboarded: StateFlow<Boolean> = _onboarded.asStateFlow()
@@ -41,7 +43,7 @@ class GallerySettings(context: Context) {
     fun setPeople(v: Boolean) { prefs.edit { putBoolean("people", v) }; _people.value = v }
     fun setReadText(v: Boolean) { prefs.edit { putBoolean("read_text", v) }; _readText.value = v }
     fun setReadHindi(v: Boolean) { prefs.edit { putBoolean("read_hindi", v) }; _readHindi.value = v }
-    fun setBacklogWhileCharging(v: Boolean) { prefs.edit { putBoolean("backlog_charging", v) }; _charging.value = v }
+    fun setProcessing(p: ProcessingPolicy) { p.save(prefs); _processing.value = p }
     fun setOnboarded() { prefs.edit { putBoolean("onboarded", true) }; _onboarded.value = true }
     fun setColumns(n: Int) { prefs.edit { putInt("columns", n) }; _columns.value = n }
     fun setCaptionsEnabled(v: Boolean) { prefs.edit { putBoolean("captions", v) }; _captions.value = v }

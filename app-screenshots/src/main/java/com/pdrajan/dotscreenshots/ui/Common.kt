@@ -74,8 +74,9 @@ fun ShotThumb(
     selected: Boolean,
     selectionMode: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Null where the grid's drag-to-select handles the long press. */
+    onLongClick: (() -> Unit)? = null,
     overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {},
 ) {
     MediaThumbnail(
@@ -88,6 +89,7 @@ fun ShotThumb(
         cornerRadius = 4.dp,
         onClick = onClick,
         onLongClick = onLongClick,
+        processed = shot.summarized,
         overlay = overlay,
     )
 }

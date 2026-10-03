@@ -35,6 +35,12 @@ class ModelBundle(context: Context, val label: String, specs: List<ModelSpec>) {
 
     fun refresh() = parts.forEach { it.refresh() }
 
+    /** Bytes already on the phone: finished files plus interrupted downloads that will resume. */
+    fun downloadedBytes(): Long = parts.sumOf { if (it.isReady()) it.spec.sizeBytes else it.partialBytes() }
+
+    /** Where the files are, for people ("Download/AI Models"), or null until downloaded. */
+    fun location(): String? = parts.firstNotNullOfOrNull { it.describeLocation() }?.substringBeforeLast('/')
+
     fun delete() = parts.forEach { it.delete() }
 
     private fun combined(states: List<ModelDownloader.State>): ModelDownloader.State {

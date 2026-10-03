@@ -1,13 +1,12 @@
 package com.pdrajan.dotgallery.index
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.net.Uri
+import com.pdrajan.dot.engine.VisionPrompts
 import com.pdrajan.dot.llm.LlamaEngine
 import com.pdrajan.dot.llm.ModelBundle
 import com.pdrajan.dot.llm.PowerGate
 import com.pdrajan.dot.media.DotLog
-import com.pdrajan.dot.ml.BitmapLoader
+import com.pdrajan.dot.ml.RgbImage
 import com.pdrajan.dotgallery.data.GalleryRepository
 import com.pdrajan.dotgallery.data.GallerySettings
 import kotlinx.coroutines.CancellationException
@@ -26,13 +25,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 /**
- * One-sentence photo descriptions ("A blue bus parked on a city street…") from a small on-device
- * vision model (LFM2.5-VL 450M via llama.cpp), searchable like everything else. The model is
- * loaded on demand and released a minute after the last photo; [PowerGate] decides when it may run.
+ * A one-sentence description and keywords for every photo ("A blue bus parked on a city street…";
+ * "bus, street, people…") from the on-device vision model both apps share (LFM2.5-VL 1.6B via
+ * llama.cpp). Search relies on them. The model is loaded on demand and released a minute after the
+ * last photo; [PowerGate] decides when it may run.
  */
 class PhotoDescriber(
     private val context: Context,
@@ -51,8 +49,8 @@ class PhotoDescriber(
     private val _progress = MutableStateFlow<Pair<Int, Int>?>(null)
     val progress: StateFlow<Pair<Int, Int>?> = _progress.asStateFlow()
 
-    /** The model is downloaded and descriptions are switched on. */
-    val available: Boolean get() = settings.captionsEnabled.value && model.isReady()
+    /** The model is downloaded. */
+    val available: Boolean get() = model.isReady()
 
     /** Describes up to [limit] photos taken after [since], newest first. Returns how many were written. */
     suspend fun process(
@@ -60,9 +58,10 @@ class PhotoDescriber(
         since: Long = 0L,
         deadline: Long = Long.MAX_VALUE,
         userAsked: Boolean = false,
+        foreground: Boolean = true,
         isStopped: () -> Boolean = { false },
     ): Int = lock.withLock {
-        if (!available || blocked(userAsked)) return 0
+        if (!available || blocked(userAsked, foreground)) return 0
         val jobs = repo.captionQueue(limit, since)
         if (jobs.isEmpty()) return 0
         releaseJob?.cancel()
@@ -78,16 +77,16 @@ class PhotoDescriber(
                 return 0
             }
             for (job in jobs) {
-                if (isStopped() || System.currentTimeMillis() > deadline || blocked(userAsked)) break
+                if (isStopped() || System.currentTimeMillis() > deadline || blocked(userAsked, foreground)) break
                 currentCoroutineContext().ensureActive()
                 val itemStart = System.currentTimeMillis()
                 try {
-                    val rgb = withContext(Dispatchers.IO) { loadRgb(job.uri) }
-                    val caption = clean(describe(vlm, rgb))
-                    if (caption.isEmpty()) {
+                    val rgb = withContext(Dispatchers.IO) { RgbImage.load(context.contentResolver, job.uri, MAX_SIDE) }
+                    val answer = VisionPrompts.parsePhoto(describe(vlm, rgb))
+                    if (answer == null) {
                         repo.markCaptionFailed(job.id)
                     } else {
-                        repo.saveCaption(job.id, caption)
+                        repo.saveCaption(job.id, answer.description, answer.keywords)
                         written++
                         if (written == 1) DotLog.i("describe: first photo took ${System.currentTimeMillis() - itemStart} ms")
                     }
@@ -122,39 +121,11 @@ class PhotoDescriber(
         return llm
     }
 
-    private class Rgb(val bytes: ByteArray, val width: Int, val height: Int)
-
-    /** The photo at most [MAX_SIDE] px on its longest side, as RGB bytes. */
-    private fun loadRgb(uri: Uri): Rgb {
-        val decoded = BitmapLoader.load(context.contentResolver, uri, maxWidth = MAX_SIDE * 2, maxPixels = MAX_SIDE * MAX_SIDE * 4)
-        val scale = MAX_SIDE.toFloat() / max(decoded.width, decoded.height)
-        val bitmap = if (scale < 1f) {
-            Bitmap.createScaledBitmap(decoded, max(1, (decoded.width * scale).roundToInt()), max(1, (decoded.height * scale).roundToInt()), true)
-                .also { if (it !== decoded) decoded.recycle() }
-        } else {
-            decoded
-        }
-        try {
-            val w = bitmap.width
-            val h = bitmap.height
-            val pixels = IntArray(w * h)
-            bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-            val rgb = ByteArray(w * h * 3)
-            var k = 0
-            for (p in pixels) {
-                rgb[k++] = (p shr 16).toByte()
-                rgb[k++] = (p shr 8).toByte()
-                rgb[k++] = p.toByte()
-            }
-            return Rgb(rgb, w, h)
-        } finally {
-            bitmap.recycle()
-        }
-    }
-
     /** Generation is a blocking native call: on cancellation, tell llama.cpp to stop right away. */
-    private suspend fun describe(vlm: LlamaEngine, image: Rgb): String = coroutineScope {
-        val work = async(Dispatchers.Default) { vlm.describe(image.bytes, image.width, image.height, INSTRUCTION, MAX_TOKENS) }
+    private suspend fun describe(vlm: LlamaEngine, image: RgbImage): String = coroutineScope {
+        val work = async(Dispatchers.Default) {
+            vlm.describe(image.bytes, image.width, image.height, VisionPrompts.PHOTO, VisionPrompts.PHOTO_GRAMMAR, VisionPrompts.MAX_TOKENS)
+        }
         try {
             work.await()
         } catch (e: CancellationException) {
@@ -164,8 +135,8 @@ class PhotoDescriber(
     }
 
     /** Logs when descriptions pause or resume for battery or heat (once per change). */
-    private fun blocked(userAsked: Boolean): Boolean {
-        val reason = power.blocker(userAsked)
+    private fun blocked(userAsked: Boolean, foreground: Boolean): Boolean {
+        val reason = power.blocker(userAsked, foreground)
         if (reason != lastBlocker) {
             DotLog.i(if (reason != null) "describe: paused ($reason)" else "describe: allowed again")
             lastBlocker = reason
@@ -191,22 +162,8 @@ class PhotoDescriber(
     }
 
     companion object {
-        const val INSTRUCTION = "Describe this photo in one short sentence."
         private const val MAX_SIDE = 512
-        // Enough detail for one sentence; fewer image tokens keep each photo to about a second or two.
+        // Enough detail for a sentence and keywords; fewer image tokens are much slower with this model.
         private const val MAX_IMAGE_TOKENS = 128
-        private const val MAX_TOKENS = 60
-
-        /** One tidy sentence: an answer cut off by the token limit loses its unfinished tail. */
-        fun clean(raw: String): String {
-            val text = raw.replace(Regex("\\s+"), " ").trim().trim('"')
-            if (text.isEmpty()) return ""
-            val end = text.indexOfAny(charArrayOf('.', '!', '?'))
-            return when {
-                end >= 0 -> text.substring(0, end + 1)
-                text.length > 140 -> text.substring(0, text.lastIndexOf(' ', 140).takeIf { it > 40 } ?: 140) + "…"
-                else -> text
-            }
-        }
     }
 }

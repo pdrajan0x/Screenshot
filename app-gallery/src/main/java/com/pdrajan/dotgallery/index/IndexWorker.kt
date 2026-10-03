@@ -22,45 +22,44 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         DotLog.i("worker: $mode run started")
         val deadline = System.currentTimeMillis() + 8 * 60_000L
         runCatching { c.engine.sync() }
-        // Photo descriptions never run in the background on battery: they wait for the charger
-        // (or for the app to be opened), and unplugging stops them mid-batch.
         val power = c.power
-        val describeStopped = { isStopped || !power.isCharging }
+        // Settings → Processing: background work at all, and when on battery.
+        val blocker = power.blocker(foreground = false)
+        val stopped = { isStopped || power.blocker(foreground = false) != null }
         var indexed = 0
         var described = 0
         if (mode == MODE_NEW) {
-            indexed = c.engine.process(limit = 40, deadline = deadline) { isStopped }
-            if (power.isCharging) {
+            // New photos are quick to analyse; that waits only if background processing is off.
+            if (c.settings.processing.value.background) indexed = c.engine.process(limit = 40, deadline = deadline) { isStopped }
+            if (blocker == null) {
                 described = c.describer.process(
-                    limit = 6, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline, isStopped = describeStopped,
+                    limit = 6, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline, foreground = false, isStopped = stopped,
                 )
             }
-        } else {
-            while (!isStopped && System.currentTimeMillis() < deadline) {
-                val n = c.engine.process(limit = 50, deadline = deadline) { isStopped }
+        } else if (blocker == null) {
+            while (!stopped() && System.currentTimeMillis() < deadline) {
+                val n = c.engine.process(limit = 50, deadline = deadline, isStopped = stopped)
                 if (n == 0) break
                 indexed += n
             }
-            while (!describeStopped() && System.currentTimeMillis() < deadline) {
-                val n = c.describer.process(limit = 10, deadline = deadline, isStopped = describeStopped)
+            while (!stopped() && System.currentTimeMillis() < deadline) {
+                val n = c.describer.process(limit = 10, deadline = deadline, foreground = false, isStopped = stopped)
                 if (n == 0) break
                 described += n
             }
         }
         if (mode == MODE_NEW) c.scheduler.watchForNewMedia(afterCurrent = true)
         // Only chain another backlog run when this one got somewhere; a run that did nothing
-        // (a persistent error) waits for the next app open or new photo instead of looping.
+        // waits for the next app open or new photo instead of looping.
         val toRead = c.repo.counts().pending
         val toDescribe = if (c.describer.available) c.repo.captionCounts().second else 0
         val progressed = indexed + described > 0 || mode == MODE_NEW
-        if (progressed && toRead > 0) {
+        if (progressed && (toRead > 0 || toDescribe > 0) && c.settings.processing.value.background) {
             c.scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
-        } else if (progressed && toDescribe > 0) {
-            c.scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG, requireCharging = true)
         }
         DotLog.i(
             "worker: $mode run finished · $indexed analysed, $described described" +
-                (if (power.isCharging) "" else " (descriptions wait for the charger)") + " · $toRead to analyse, $toDescribe to describe",
+                (blocker?.let { " (paused: $it)" } ?: "") + " · $toRead to analyse, $toDescribe to describe",
         )
         return Result.success()
     }
@@ -72,7 +71,7 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     }
 }
 
-class IndexScheduler(private val context: Context, private val backlogWhileCharging: () -> Boolean) {
+class IndexScheduler(private val context: Context, private val chargingOnly: () -> Boolean) {
     private val wm get() = WorkManager.getInstance(context)
 
     fun watchForNewMedia(afterCurrent: Boolean = false) {
@@ -93,11 +92,8 @@ class IndexScheduler(private val context: Context, private val backlogWhileCharg
         )
     }
 
-    /**
-     * Older media. Analysing follows the "only while charging" setting; when only descriptions are
-     * left ([requireCharging]), the job always waits for the charger.
-     */
-    fun scheduleBacklog(afterCurrent: Boolean = false, requireCharging: Boolean = backlogWhileCharging()) {
+    /** Older media and AI descriptions; waits for the charger unless processing on battery is allowed. */
+    fun scheduleBacklog(afterCurrent: Boolean = false, requireCharging: Boolean = chargingOnly()) {
         val constraints = Constraints.Builder()
             .setRequiresBatteryNotLow(true)
             .setRequiresCharging(requireCharging)
@@ -115,5 +111,9 @@ class IndexScheduler(private val context: Context, private val backlogWhileCharg
     fun rescheduleBacklog() {
         wm.cancelUniqueWork("gallery-backlog")
         scheduleBacklog()
+    }
+
+    fun cancelBacklog() {
+        wm.cancelUniqueWork("gallery-backlog")
     }
 }

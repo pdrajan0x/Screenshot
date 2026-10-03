@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -16,6 +17,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.pdrajan.dot.llm.ModelDownloader
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.DotScreenshotsApp
 
@@ -42,6 +44,7 @@ inline fun <reified VM : ViewModel> containerViewModel(key: String? = null, cros
 fun DotScreenshotsNavHost(container: AppContainer) {
     val nav = rememberNavController()
     val onboarded by container.settings.onboardingDone.collectAsStateWithLifecycle()
+    val modelState by remember { container.model.state }.collectAsStateWithLifecycle(container.model.currentState())
 
     fun openDetail(id: Long, ctx: String) = nav.navigate("detail/$id?ctx=${Uri.encode(ctx)}")
 
@@ -57,6 +60,11 @@ fun DotScreenshotsNavHost(container: AppContainer) {
             })
         }
         composable("home") {
+            // The app waits for the AI model: it writes every title, summary and keyword.
+            if (modelState != ModelDownloader.State.Ready) {
+                ModelGate(container)
+                return@composable
+            }
             HomeScreen(
                 onOpenShot = { id -> openDetail(id, ShotContext.ALL) },
                 onSearch = { nav.navigate("search") },
@@ -66,10 +74,14 @@ fun DotScreenshotsNavHost(container: AppContainer) {
                 onSettings = { nav.navigate("settings") },
             )
         }
-        composable("search") {
+        composable(
+            "search?q={q}",
+            arguments = listOf(navArgument("q") { type = NavType.StringType; defaultValue = "" }),
+        ) { entry ->
             SearchScreen(
                 onBack = { nav.popBackStack() },
                 onOpenShot = { id -> openDetail(id, ShotContext.SEARCH) },
+                initialQuery = entry.arguments?.getString("q").orEmpty(),
             )
         }
         composable(
@@ -87,6 +99,7 @@ fun DotScreenshotsNavHost(container: AppContainer) {
                 onBack = { nav.popBackStack() },
                 onOpenShot = { openDetail(it, ShotContext.SINGLE) },
                 onOpenCollection = { nav.navigate("list/${Uri.encode(ShotContext.collection(it))}") },
+                onSearch = { q -> nav.navigate("search?q=${Uri.encode(q)}") },
             )
         }
         composable(

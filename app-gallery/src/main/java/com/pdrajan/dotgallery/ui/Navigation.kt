@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
@@ -44,6 +45,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.pdrajan.dot.design.DotTheme
+import com.pdrajan.dot.llm.ModelDownloader
 import com.pdrajan.dotgallery.GalleryContainer
 import kotlinx.coroutines.flow.StateFlow
 
@@ -51,7 +53,7 @@ import kotlinx.coroutines.flow.StateFlow
 object ListKind {
     const val ALBUM = "album"
     const val FOLDER = "folder"
-    const val TAG = "tag"
+    const val KEYWORD = "keyword"
     const val PERSON = "person"
     const val FAVORITES = "favorites"
     const val VIDEOS = "videos"
@@ -83,6 +85,7 @@ fun GalleryNavHost(c: GalleryContainer, external: StateFlow<Uri?>, onExternalHan
     val nav = rememberNavController()
     val g = GalleryNav(nav, c)
     val onboarded by c.settings.onboarded.collectAsStateWithLifecycle()
+    val modelState by remember { c.describerModel.state }.collectAsStateWithLifecycle(c.describerModel.currentState())
     val externalUri by external.collectAsStateWithLifecycle()
 
     LaunchedEffect(externalUri) {
@@ -100,7 +103,8 @@ fun GalleryNavHost(c: GalleryContainer, external: StateFlow<Uri?>, onExternalHan
         composable("onboarding") {
             OnboardingScreen(onDone = { nav.navigate("main") { popUpTo("onboarding") { inclusive = true } } })
         }
-        composable("main") { MainScreen(g) }
+        // Photos opened from other apps work without it; the gallery itself waits for the AI model.
+        composable("main") { if (modelState == ModelDownloader.State.Ready) MainScreen(g) else ModelGate(c) }
         composable("viewer/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { e ->
             ViewerScreen(initialId = e.arguments?.getLong("id") ?: return@composable, nav = g)
         }

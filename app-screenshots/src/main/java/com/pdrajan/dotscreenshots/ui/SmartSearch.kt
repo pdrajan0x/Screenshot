@@ -1,155 +1,94 @@
 package com.pdrajan.dotscreenshots.ui
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.pdrajan.dot.design.DotOutlinedButton
-import com.pdrajan.dot.design.DotPrimaryButton
-import com.pdrajan.dot.design.DotTheme
-import com.pdrajan.dot.design.SettingsSwitchRow
+import com.pdrajan.dot.design.ModelDownloadUi
+import com.pdrajan.dot.design.ModelSetupScreen
+import com.pdrajan.dot.design.SettingsRow
+import com.pdrajan.dot.llm.ModelBundle
 import com.pdrajan.dot.llm.ModelDownloader
-import com.pdrajan.dot.llm.ModelSource
+import com.pdrajan.dot.llm.SharedModel
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.SummaryCounts
 
 private fun mb(bytes: Long) = "%,d MB".format(bytes / 1_000_000)
 
-/** Settings rows: the AI summary model. */
-@Composable
-fun SmartSearchSettings(c: AppContainer) {
-    SummaryModelPanel(c)
+fun ModelBundle.downloadUi(state: ModelDownloader.State): ModelDownloadUi = when (state) {
+    ModelDownloader.State.Ready -> ModelDownloadUi(true, false, false, sizeBytes, sizeBytes, null)
+    is ModelDownloader.State.Downloading -> ModelDownloadUi(false, true, false, state.bytes, state.total, null)
+    ModelDownloader.State.Verifying -> ModelDownloadUi(false, false, true, sizeBytes, sizeBytes, null)
+    is ModelDownloader.State.Failed -> ModelDownloadUi(false, false, false, state.bytes, sizeBytes, state.message)
+    ModelDownloader.State.Missing -> ModelDownloadUi(false, false, false, downloadedBytes(), sizeBytes, null)
 }
 
+/** Shown instead of the app until the AI model is on the phone. */
 @Composable
-private fun SummaryModelPanel(c: AppContainer) {
-    val state by c.modelDownload.state.collectAsStateWithLifecycle()
-    val enabled by c.settings.summariesEnabled.collectAsStateWithLifecycle()
+fun ModelGate(c: AppContainer) {
+    val ctx = LocalContext.current
+    val model = c.model
+    val state by remember { model.state }.collectAsStateWithLifecycle(model.currentState())
+    // Back from "All files access" (or the Files app): look for the other app's copy again.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.refresh() }
+    ModelSetupScreen(
+        appName = "Dot Screenshots",
+        modelName = model.label,
+        ui = model.downloadUi(state),
+        onDownload = { c.downloadModel() },
+        onPause = { c.pauseDownload() },
+        onUseOtherAppsCopy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            {
+                if (SharedModel.canReadOtherAppsFiles()) {
+                    model.refresh()
+                    if (!model.isReady()) {
+                        Toast.makeText(ctx, "Not found in Download/AI Models yet. Finish the download in Dot Gallery first.", Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    ctx.startSafely(SharedModel.allFilesAccessIntent(ctx))
+                }
+            }
+        } else {
+            null
+        },
+    )
+}
+
+/** Settings: what the AI model has done, and old model files that can go. */
+@Composable
+fun AiModelPanel(c: AppContainer) {
+    val ctx = LocalContext.current
     val counts by remember { c.repo.observeSummaryCounts() }.collectAsStateWithLifecycle(SummaryCounts(0, 0))
-    val spec = c.modelDownload.spec
-    val shared = c.modelDownload.sharedDir != null
-    // A copy already on the phone: one another app downloaded, or this app's own after a reinstall.
-    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(c::useModelFile) }
-    val pickButton = @Composable {
-        TextButton(onClick = { pickFile.launch(arrayOf("*/*")) }) {
-            Icon(Icons.Rounded.FolderOpen, null, modifier = Modifier.padding(end = 8.dp))
-            Text("Use a file I already have")
-        }
-    }
-    val m = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-    when (val s = state) {
-        ModelDownloader.State.Ready -> {
-            SettingsSwitchRow(
-                title = "AI summaries",
-                subtitle = "Titles, summaries and keywords written on this phone by ${spec.label}. " +
-                    "${counts.done} done" + if (counts.waiting > 0) ", ${counts.waiting} waiting (mostly while charging)." else ".",
-                checked = enabled,
-                onCheckedChange = { c.settings.setSummariesEnabled(it); if (it) c.onForeground() },
-            )
-            val picked = c.modelDownload.source() is ModelSource.Picked
-            c.modelDownload.describeLocation()?.let { where ->
-                Text(
-                    if (picked || where == "app storage") "Model: $where" else "Model saved in $where · other apps can open it from there",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp),
-                )
-            }
-            TextButton(onClick = { c.deleteModel() }, modifier = Modifier.padding(start = 8.dp)) {
-                Text(if (picked) "Stop using this file" else "Delete model (${mb(spec.sizeBytes)})")
-            }
-        }
-        is ModelDownloader.State.Downloading -> Column(m) {
-            Text("Downloading ${spec.label}", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            LinearProgressIndicator(
-                progress = { s.bytes.toFloat() / s.total },
-                modifier = Modifier.fillMaxWidth(),
-                color = DotTheme.extra.accent,
-                strokeCap = StrokeCap.Round,
-            )
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("${mb(s.bytes)} of ${mb(s.total)} · keep the app open", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                TextButton(onClick = { c.pauseDownload() }) { Text("Pause") }
-            }
-        }
-        ModelDownloader.State.Verifying -> Column(m) {
-            Text("Checking the model file…", style = MaterialTheme.typography.titleMedium)
-            Text("Takes a few seconds", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        is ModelDownloader.State.Failed -> Column(m) {
-            Text("AI summaries", style = MaterialTheme.typography.titleMedium)
-            Text(
-                if (s.bytes > 0) "${s.message} · ${mb(s.bytes)} of ${mb(spec.sizeBytes)} downloaded" else s.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            DotOutlinedButton(if (s.bytes > 0) "Resume download" else "Download model", onClick = { c.downloadModel() }, icon = Icons.Rounded.Download)
-            pickButton()
-        }
-        ModelDownloader.State.Missing -> Column(m) {
-            Text("AI summaries", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Titles, summaries and smarter search, written on this phone by ${spec.label}. " +
-                    "One-time download of ${mb(spec.sizeBytes)} (Wi-Fi recommended). Nothing is uploaded." +
-                    if (shared) " Saved in Download/${ModelDownloader.SHARED_FOLDER} so other apps can use it too." else "",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            DotPrimaryButton("Download model", onClick = { c.downloadModel() }, icon = Icons.Rounded.Download, accent = true)
-            pickButton()
-        }
-    }
-}
-
-/** Home card suggesting the summary model, until it's set up or dismissed. */
-@Composable
-fun SmartSearchTip(c: AppContainer, modifier: Modifier = Modifier) {
-    val dismissed by c.settings.smartTipDismissed.collectAsStateWithLifecycle()
-    val model by c.modelDownload.state.collectAsStateWithLifecycle()
-    if (dismissed || model != ModelDownloader.State.Missing) return
-    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier.fillMaxWidth()) {
-        Column(Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.AutoAwesome, null, tint = DotTheme.extra.accent)
-                Text("Make search smarter", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                IconButton(onClick = { c.settings.dismissSmartTip() }) { Icon(Icons.Rounded.Close, "Dismiss") }
-            }
-            Text(
-                "Get a title, summary and keywords for every screenshot, written on this phone. Nothing is uploaded.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 12.dp),
-            )
-            Spacer(Modifier.height(10.dp))
-            DotOutlinedButton("Get summaries (${mb(c.modelDownload.spec.sizeBytes)})", onClick = { c.downloadModel() }, icon = Icons.Rounded.Download)
-        }
+    var retired by remember { mutableStateOf(SharedModel.retiredFiles(ctx)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { retired = SharedModel.retiredFiles(ctx) }
+    SettingsRow(
+        title = "AI summaries",
+        subtitle = "${counts.done} screenshots summarised" + (if (counts.waiting > 0) ", ${counts.waiting} waiting" else "") +
+            ". ${c.model.label} runs on this phone; the model is in ${c.model.location() ?: "app storage"} (${mb(c.model.sizeBytes)}).",
+        icon = Icons.Rounded.AutoAwesome,
+        onClick = {},
+    )
+    if (retired.isNotEmpty()) {
+        val bytes = retired.sumOf { it.first.length() }
+        SettingsRow(
+            title = "Delete old AI models",
+            subtitle = "${retired.map { it.second }.distinct().joinToString()} · ${mb(bytes)} no longer used.",
+            icon = Icons.Rounded.DeleteSweep,
+            onClick = {
+                retired.forEach { runCatching { it.first.delete() } }
+                retired = SharedModel.retiredFiles(ctx)
+                Toast.makeText(ctx, "Deleted", Toast.LENGTH_SHORT).show()
+            },
+        )
     }
 }

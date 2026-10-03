@@ -9,6 +9,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.runtime.rememberUpdatedState
+import com.pdrajan.dot.design.dragToSelect
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -78,12 +83,29 @@ class ShotListViewModel(private val c: AppContainer, val ctx: String) : ViewMode
     private val _selection = MutableStateFlow<Set<Long>>(emptySet())
     val selection: StateFlow<Set<Long>> = _selection.asStateFlow()
 
+    private val _selecting = MutableStateFlow(false)
+    val selecting: StateFlow<Boolean> = _selecting.asStateFlow()
+
     fun toggle(id: Long) {
-        _selection.value = _selection.value.let { if (id in it) it - id else it + id }
+        setSelection(_selection.value.let { if (id in it) it - id else it + id })
+    }
+
+    fun setSelection(ids: Set<Long>) {
+        _selection.value = ids
+        if (ids.isEmpty()) _selecting.value = false
+    }
+
+    fun startSelecting() {
+        _selecting.value = true
+    }
+
+    fun selectAll() {
+        _selection.value = shots.value.map { it.id }.toSet()
     }
 
     fun clear() {
         _selection.value = emptySet()
+        _selecting.value = false
     }
 
     fun selectedUris() = shots.value.filter { it.id in _selection.value }.map { it.uri }
@@ -135,7 +157,12 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
     val collections by vm.collections.collectAsStateWithLifecycle()
     val columns by vm.columns.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
-    val selectionMode = selection.isNotEmpty()
+    val selecting by vm.selecting.collectAsStateWithLifecycle()
+    val selectionMode = selecting || selection.isNotEmpty()
+    val gridState = rememberLazyGridState()
+    val currentSelection by rememberUpdatedState(selection)
+    val orderedIds = remember(shots) { shots.map { it.id } }
+    val currentIds by rememberUpdatedState(orderedIds)
     val ctx = LocalContext.current
     val deleter = rememberDeleteLauncher()
     var renaming by remember { mutableStateOf(false) }
@@ -149,7 +176,9 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
         topBar = {
             TopAppBar(
                 title = {
-                    if (selectionMode) Text("${selection.size} selected", style = MaterialTheme.typography.titleLarge)
+                    if (selectionMode) {
+                        Text(if (selection.isEmpty()) "Select screenshots" else "${selection.size} selected", style = MaterialTheme.typography.titleLarge)
+                    }
                 },
                 navigationIcon = {
                     if (selectionMode) {
@@ -159,6 +188,8 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
                     }
                 },
                 actions = {
+                    if (selectionMode) IconButton(onClick = vm::selectAll) { Icon(Icons.Rounded.SelectAll, "Select all") }
+                    if (!selectionMode && shots.isNotEmpty()) IconButton(onClick = vm::startSelecting) { Icon(Icons.Rounded.Checklist, "Select") }
                     if (!selectionMode && vm.collectionId != null) {
                         IconButton(onClick = { renaming = true }) { Icon(Icons.Rounded.DriveFileRenameOutline, "Rename") }
                         IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Rounded.DeleteOutline, "Delete collection") }
@@ -168,7 +199,7 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
             )
         },
         bottomBar = {
-            if (selectionMode) {
+            if (selection.isNotEmpty()) {
                 SelectionBar(
                     onAdd = { if (vm.collectionId != null) vm.removeSelectionFromCollection() else picker = true },
                     onShare = { ctx.startSafely(MediaActions.shareIntent(vm.selectedUris())) },
@@ -180,8 +211,11 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
     ) { padding ->
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
+            state = gridState,
             contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp),
-            modifier = Modifier.fillMaxSize().pinchToChangeColumns(columns, vm::setColumns, min = 2, max = 5),
+            modifier = Modifier.fillMaxSize()
+                .pinchToChangeColumns(columns, vm::setColumns, min = 2, max = 5)
+                .dragToSelect(gridState, { currentSelection }, vm::setSelection, { currentIds }),
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp)) {
@@ -204,7 +238,6 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
                     selected = shot.id in selection,
                     selectionMode = selectionMode,
                     onClick = { if (selectionMode) vm.toggle(shot.id) else onOpenShot(shot.id) },
-                    onLongClick = { vm.toggle(shot.id) },
                 )
             }
         }

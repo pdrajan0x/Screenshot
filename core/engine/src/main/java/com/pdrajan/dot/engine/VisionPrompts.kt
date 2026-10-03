@@ -1,0 +1,80 @@
+package com.pdrajan.dot.engine
+
+/** What the vision model wrote about a photo. */
+data class PhotoDescription(val description: String, val keywords: List<String>)
+
+/**
+ * Instructions and output grammars for the on-device vision model (LFM2.5-VL 1.6B), which writes
+ * every description, summary and keyword in both apps. The grammars keep its answers in a fixed,
+ * parseable shape: a small model otherwise runs fields together or copies the instructions.
+ */
+object VisionPrompts {
+
+    /** 4-12 short lowercase keywords, comma separated. */
+    private const val KEYWORD_RULES =
+        "kws ::= kw (\", \" kw){3,11}\n" +
+            "kw ::= [a-z0-9] [a-z0-9 '.-]{1,23}\n"
+
+    const val PHOTO =
+        "Answer in exactly this format:\n" +
+            "Description: <one sentence describing the photo>\n" +
+            "Keywords: <8 to 12 lowercase words for what is in the photo, comma separated>"
+
+    /** No colons in the description, so it can't swallow the Keywords line; 5-12 short keywords. */
+    const val PHOTO_GRAMMAR =
+        "root ::= \"Description: \" desc \"\\nKeywords: \" kws \"\\n\"?\n" +
+            "desc ::= [^\\n:]{10,220}\n" +
+            KEYWORD_RULES
+
+    /** Screenshots: the model sees the image; the OCR text (often sharper than the shrunk image) comes along. */
+    fun screenshot(screenText: String, knownApp: String?): String = buildString {
+        append("This is a phone screenshot.")
+        knownApp?.takeIf { it.isNotBlank() }?.let { append(" It was taken in ").append(it).append('.') }
+        val text = SummaryPrompt.clip(screenText.trim(), MAX_SCREEN_CHARS)
+        if (text.isNotEmpty()) append(" Text read from it:\n").append(text)
+        append("\n\nAnswer in exactly this format:\n")
+        append("Title: <3-8 words: what this is>\n")
+        append("Summary: <one sentence with the key facts: names, amounts in ₹, dates, items>\n")
+        append("App: <the name of the app shown, like WhatsApp, Instagram, Google Pay, PhonePe, Chrome, YouTube, Gmail, Amazon>\n")
+        append("Keywords: <6 to 10 lowercase search words about the content, no times>")
+    }
+
+    const val SCREENSHOT_GRAMMAR =
+        "root ::= \"Title: \" title \"\\nSummary: \" summary \"\\nApp: \" app \"\\nKeywords: \" kws \"\\n\"?\n" +
+            "title ::= [^\\n:]{3,60}\n" +
+            "summary ::= [^\\n]{10,260}\n" +
+            "app ::= [^\\n,:]{2,30}\n" +
+            KEYWORD_RULES
+
+    /** Most screens fit; long scrolling captures are cut at a line boundary to keep it quick. */
+    const val MAX_SCREEN_CHARS = 1000
+
+    /** Room for the longest grammar-shaped answer. */
+    const val MAX_TOKENS = 140
+
+    fun parsePhoto(output: String): PhotoDescription? {
+        var description = ""
+        var keywords = ""
+        output.lineSequence().forEach { line ->
+            val l = line.trim()
+            when {
+                l.startsWith("Description:", ignoreCase = true) -> description = l.substringAfter(':').trim()
+                l.startsWith("Keywords:", ignoreCase = true) -> keywords = l.substringAfter(':').trim()
+            }
+        }
+        description = description.replace(Regex("\\s+"), " ").trim()
+        if (description.isEmpty()) return null
+        if (description.last() !in ".!?") description += "."
+        return PhotoDescription(description, cleanKeywords(keywords))
+    }
+
+    /** Lowercase, distinct, no times, amounts or bare numbers ("10.42", "6.42pm", "1250"). */
+    fun cleanKeywords(raw: String): List<String> =
+        raw.split(',', ';')
+            .map { it.trim().lowercase().replace('_', ' ').replace(Regex("\\s+"), " ").trim('#', ' ', '.', '-', '\'') }
+            .filter { it.length in 2..32 && it.any { c -> c.isLetter() } && !TIME.matches(it) }
+            .distinct()
+            .take(12)
+
+    private val TIME = Regex("\\d{1,2}[.:]\\d{2}\\s*(am|pm)?")
+}

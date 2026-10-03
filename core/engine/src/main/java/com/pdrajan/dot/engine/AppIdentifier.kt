@@ -24,7 +24,8 @@ class KnownShot(val label: String, val packageName: String?, val takenAt: Long, 
  *  - what the screen looks like, against "a screenshot of the {app} app" for every candidate (CLIP);
  *  - tell-tale text and the app's own name on screen;
  *  - the user's own screenshots whose app is certain: near-identical looking ones, and ones taken
- *    within a few minutes (people take screenshots in bursts).
+ *    within a few minutes (people take screenshots in bursts);
+ *  - the app the vision model named after looking at the screenshot.
  * The scores are combined in log space; the softmax of the winner is its confidence.
  */
 class AppIdentifier(
@@ -60,7 +61,8 @@ class AppIdentifier(
 
     val size: Int get() = entries.size
 
-    fun identify(text: String, crops: List<FloatArray>, takenAt: Long): Result? {
+    /** @param modelApp the app the vision model named for this screenshot, or null. */
+    fun identify(text: String, crops: List<FloatArray>, takenAt: Long, modelApp: String? = null): Result? {
         if (entries.isEmpty()) return null
         val lower = text.lowercase()
         val clues = AppRecognizer.textScores(lower)
@@ -68,6 +70,8 @@ class AppIdentifier(
         val mean = if (crops.isEmpty()) null else VectorMath.mean(crops)
         val neighbours = mean?.let { knnVotes(it) }.orEmpty()
         val nearby = timeVotes(takenAt)
+        val named = modelApp?.let(::key)
+        val namedCanonical = modelApp?.let(AppRecognizer::canonical)
 
         val scores = DoubleArray(entries.size)
         for ((i, e) in entries.withIndex()) {
@@ -78,6 +82,7 @@ class AppIdentifier(
             val k = key(e.candidate.label)
             s += neighbours[k] ?: 0.0
             s += nearby[k] ?: 0.0
+            if (named != null && (k == named || (namedCanonical != null && e.canonical == namedCanonical))) s += MODEL_WEIGHT
             // Apps that aren't installed are less likely, but stay possible.
             if (e.candidate.packageName == null) s += NOT_INSTALLED
             scores[i] = s
@@ -131,6 +136,8 @@ class AppIdentifier(
         private const val KNN_CAP = 6.0
         private const val NEARBY_MILLIS = 3 * 60_000L
         private const val NEARBY_WEIGHT = 2.5
+        // The model sees the screen like a person would; its answer is strong but not final.
+        private const val MODEL_WEIGHT = 3.0
         private const val NOT_INSTALLED = -0.5
 
         fun key(label: String) = label.trim().lowercase()

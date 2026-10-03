@@ -44,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pdrajan.dot.design.DiagnosticsDialog
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotLargeTitle
+import com.pdrajan.dot.design.ProcessingSettings
 import com.pdrajan.dot.design.SectionLabel
 import com.pdrajan.dot.design.SettingsRow
 import com.pdrajan.dot.design.SettingsSwitchRow
@@ -60,7 +61,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val theme by c.settings.theme.collectAsStateWithLifecycle()
     val hindi by c.settings.readHindi.collectAsStateWithLifecycle()
-    val charging by c.settings.backlogWhileCharging.collectAsStateWithLifecycle()
+    val processing by c.settings.processing.collectAsStateWithLifecycle()
     val countsFlow = remember { c.repo.observeCounts() }
     val counts by countsFlow.collectAsStateWithLifecycle(IndexCounts(0, 0, 0, 0))
     var confirmReindex by remember { mutableStateOf(false) }
@@ -111,19 +112,18 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            SectionLabel("Smarter search", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            SmartSearchSettings(c)
+            SectionLabel("AI model", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+            AiModelPanel(c)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            SectionLabel("Battery", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            SettingsSwitchRow(
-                title = "Process older screenshots only while charging",
-                subtitle = "New screenshots are always read right away.",
-                checked = charging,
-                onCheckedChange = {
-                    c.settings.setBacklogWhileCharging(it)
-                    c.scheduler.rescheduleBacklog()
+            SectionLabel("Processing", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+            ProcessingSettings(
+                policy = processing,
+                onChange = {
+                    c.settings.setProcessing(it)
+                    if (it.background) c.scheduler.rescheduleBacklog() else c.scheduler.cancelBacklog()
                 },
+                appName = "Dot Screenshots",
             )
             SettingsRow(
                 title = "Allow background processing",
@@ -173,7 +173,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmReindex = false },
             title = { Text("Re-scan everything?") },
-            text = { Text("Every screenshot will be read again — while charging, unless you choose “Do it now” on the home screen.") },
+            text = { Text("Every screenshot will be read again, following Settings → Processing (or right away with “Do it now” on the home screen).") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmReindex = false

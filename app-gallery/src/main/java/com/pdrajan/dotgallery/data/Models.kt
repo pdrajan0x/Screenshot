@@ -20,7 +20,10 @@ data class Media(
     val bucket: String?,
     val favorite: Boolean,
     val archived: Boolean,
-    val tags: List<String>,
+    /** Keywords the AI wrote for it. */
+    val keywords: List<String>,
+    /** The AI has described it (a tiny red dot on its thumbnail). */
+    val described: Boolean,
 ) {
     val isVideo get() = type == MediaType.VIDEO
 }
@@ -42,7 +45,6 @@ data class AlbumSummary(val id: Long, val name: String, val count: Int, val cove
 
 data class PersonSummary(val id: Long, val name: String?, val count: Int, val thumb: String?, val hidden: Boolean)
 
-data class TagSummary(val id: String, val count: Int, val cover: Uri?)
 
 data class LockedItem(
     val id: Long,

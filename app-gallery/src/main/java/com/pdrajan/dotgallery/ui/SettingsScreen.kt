@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pdrajan.dot.design.DiagnosticsDialog
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotLargeTitle
+import com.pdrajan.dot.design.ProcessingSettings
 import com.pdrajan.dot.design.SectionLabel
 import com.pdrajan.dot.design.SettingsRow
 import com.pdrajan.dot.design.SettingsSwitchRow
@@ -72,7 +73,7 @@ fun SettingsScreen(nav: GalleryNav) {
     val people by c.settings.people.collectAsStateWithLifecycle()
     val readText by c.settings.readText.collectAsStateWithLifecycle()
     val hindi by c.settings.readHindi.collectAsStateWithLifecycle()
-    val charging by c.settings.backlogWhileCharging.collectAsStateWithLifecycle()
+    val processing by c.settings.processing.collectAsStateWithLifecycle()
     val counts by remember { c.repo.observeCounts() }.collectAsStateWithLifecycle(IndexCounts(0, 0, 0))
     var access by remember { mutableStateOf(MediaPermissions.access(ctx)) }
     var canManage by remember { mutableStateOf(canManageMedia(ctx)) }
@@ -139,7 +140,7 @@ fun SettingsScreen(nav: GalleryNav) {
                     onCheckedChange = { c.settings.setReadHindi(it) },
                 )
             }
-            PhotoDescriptionsPanel(c)
+            AiModelPanel(c)
             SettingsRow(
                 title = "Re-scan library",
                 subtitle = "Analyses every photo again with the current settings. Albums, favourites and names are kept.",
@@ -148,15 +149,14 @@ fun SettingsScreen(nav: GalleryNav) {
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            SectionLabel("Battery", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            SettingsSwitchRow(
-                title = "Analyse older photos only while charging",
-                subtitle = "New photos are always analysed right away.",
-                checked = charging,
-                onCheckedChange = {
-                    c.settings.setBacklogWhileCharging(it)
-                    c.scheduler.rescheduleBacklog()
+            SectionLabel("Processing", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+            ProcessingSettings(
+                policy = processing,
+                onChange = {
+                    c.settings.setProcessing(it)
+                    if (it.background) c.scheduler.rescheduleBacklog() else c.scheduler.cancelBacklog()
                 },
+                appName = "Dot Gallery",
             )
             SettingsRow(
                 title = "Allow background processing",
@@ -225,7 +225,7 @@ fun SettingsScreen(nav: GalleryNav) {
         AlertDialog(
             onDismissRequest = { confirmRescan = false },
             title = { Text("Re-scan everything?") },
-            text = { Text("Every photo will be analysed again — while charging, unless you choose “Do it now” in Photos.") },
+            text = { Text("Every photo will be analysed and described again, following Settings → Processing (or right away with “Do it now” in Photos).") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRescan = false

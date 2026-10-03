@@ -2,6 +2,17 @@ package com.pdrajan.dotgallery.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -52,10 +63,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -84,7 +93,7 @@ import coil3.compose.AsyncImage
 import com.pdrajan.dot.design.DateLabels
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotTheme
-import com.pdrajan.dot.engine.PhotoTags
+import com.pdrajan.dot.design.KeywordChips
 import com.pdrajan.dot.media.MediaActions
 import com.pdrajan.dot.media.MediaInfo
 import com.pdrajan.dot.media.PhotoInfo
@@ -108,7 +117,8 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
     val albums by remember { c.repo.observeAlbums() }.collectAsStateWithLifecycle(emptyList())
     var chrome by remember { mutableStateOf(true) }
     var menu by remember { mutableStateOf(false) }
-    var info by remember { mutableStateOf(false) }
+    var detailsShown by remember { mutableStateOf(false) }
+    var pageRequest by remember { mutableStateOf<PageRequest?>(null) }
     var albumPicker by remember { mutableStateOf(false) }
     var slideshow by remember { mutableStateOf(false) }
     val trash = rememberTrasher()
@@ -119,6 +129,12 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
         ids.remove(id)
         if (ids.isEmpty()) nav.back()
     }
+
+    fun requestDetails(open: Boolean) {
+        pageRequest = PageRequest(currentId, open, (pageRequest?.serial ?: 0) + 1)
+    }
+    BackHandler(enabled = detailsShown) { requestDetails(open = false) }
+    fun openKeyword(k: String) { nav.list(ListKind.KEYWORD, k) }
 
     LaunchedEffect(slideshow) {
         if (!slideshow) return@LaunchedEffect
@@ -133,14 +149,20 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(state = pager, key = { ids.getOrElse(it) { -1L } }, beyondViewportPageCount = 1, modifier = Modifier.fillMaxSize()) { page ->
             val m = media[ids.getOrNull(page)] ?: return@HorizontalPager
-            if (m.isVideo) {
-                VideoPage(m.uri, active = page == pager.settledPage, onTap = { chrome = !chrome })
-            } else {
-                ZoomableAsyncImage(model = m.uri, contentDescription = m.name, modifier = Modifier.fillMaxSize(), onClick = { chrome = !chrome; slideshow = false })
-            }
+            MediaPage(
+                m = m,
+                active = page == pager.settledPage,
+                isCurrent = page == pager.currentPage,
+                request = pageRequest,
+                onTap = { chrome = !chrome; slideshow = false },
+                onDetailsShown = { detailsShown = it },
+                onPerson = { nav.list(ListKind.PERSON, it.toString()) },
+                onAlbum = { nav.list(ListKind.ALBUM, it.toString()) },
+                onKeyword = ::openKeyword,
+            )
         }
 
-        AnimatedVisibility(chrome, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter)) {
+        AnimatedVisibility(chrome && !detailsShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter)) {
             Row(
                 Modifier.fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
@@ -203,7 +225,7 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
             }
         }
 
-        AnimatedVisibility(chrome, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
+        AnimatedVisibility(chrome && !detailsShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
             Column(
                 Modifier.fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
@@ -216,7 +238,7 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
                     color = Color.White,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth().clickable { info = true }.padding(horizontal = 20.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { requestDetails(open = true) }.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
             }
             Row(
@@ -236,7 +258,7 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
                     { m?.let { scope.launch { c.repo.setFavorite(listOf(it.id), !it.favorite) } } },
                     tint = if (m?.favorite == true) DotTheme.extra.accent else Color.White,
                 )
-                BarAction(Icons.Rounded.Info, "Info", { info = true }, tint = Color.White)
+                BarAction(Icons.Rounded.Info, "Info", { requestDetails(open = true) }, tint = Color.White)
                 BarAction(Icons.Rounded.Delete, "Delete", {
                     val target = m ?: return@BarAction
                     trash(listOf(target.uri)) { ok ->
@@ -260,15 +282,62 @@ fun ViewerScreen(initialId: Long, nav: GalleryNav) {
         )
     }
 
-    if (info) {
-        val d = detail
-        if (d != null) {
-            ModalBottomSheet(
-                onDismissRequest = { info = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+}
+
+private data class PageRequest(val id: Long, val open: Boolean, val serial: Int)
+
+/**
+ * One photo or video, full screen, with its details below: swipe up for the date, file, size,
+ * camera and place, then the AI description and keywords, people, albums and text in the photo.
+ */
+@Composable
+private fun MediaPage(
+    m: Media,
+    active: Boolean,
+    isCurrent: Boolean,
+    request: PageRequest?,
+    onTap: () -> Unit,
+    onDetailsShown: (Boolean) -> Unit,
+    onPerson: (Long) -> Unit,
+    onAlbum: (Long) -> Unit,
+    onKeyword: (String) -> Unit,
+) {
+    val c = galleryContainer()
+    val detail by remember(m.id) { c.repo.observeDetail(m.id) }.collectAsStateWithLifecycle(null)
+    val scroll = rememberScrollState()
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val viewport = maxHeight
+        val viewportPx = with(LocalDensity.current) { viewport.toPx() }
+        LaunchedEffect(request) {
+            val r = request ?: return@LaunchedEffect
+            if (r.id == m.id) scroll.animateScrollTo(if (r.open) (viewportPx * 0.55f).toInt() else 0)
+        }
+        if (isCurrent) {
+            LaunchedEffect(scroll, viewportPx) {
+                snapshotFlow { scroll.value > viewportPx * 0.12f }.distinctUntilChanged().collect { onDetailsShown(it) }
+            }
+        }
+        // Back on the picture when swiped away.
+        LaunchedEffect(isCurrent) { if (!isCurrent && scroll.value > 0) scroll.scrollTo(0) }
+        Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
+            Box(Modifier.fillMaxWidth().height(viewport)) {
+                if (m.isVideo) {
+                    VideoPage(m.uri, active = active, onTap = onTap)
+                } else {
+                    ZoomableAsyncImage(model = m.uri, contentDescription = m.name, modifier = Modifier.fillMaxSize(), onClick = { onTap() })
+                }
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = viewport * 0.6f),
             ) {
-                InfoSheet(d, onPerson = { info = false; nav.list(ListKind.PERSON, it.toString()) }, onAlbum = { info = false; nav.list(ListKind.ALBUM, it.toString()) }, onTag = { info = false; nav.list(ListKind.TAG, it) })
+                val d = detail
+                if (d != null) {
+                    InfoSheet(d, onPerson = onPerson, onAlbum = onAlbum, onKeyword = onKeyword)
+                } else {
+                    Spacer(Modifier.fillMaxWidth().height(160.dp))
+                }
             }
         }
     }
@@ -308,17 +377,19 @@ fun VideoPage(uri: Uri, active: Boolean, onTap: () -> Unit) {
 
 @kotlin.OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun InfoSheet(d: MediaDetail, onPerson: (Long) -> Unit, onAlbum: (Long) -> Unit, onTag: (String) -> Unit) {
+private fun InfoSheet(d: MediaDetail, onPerson: (Long) -> Unit, onAlbum: (Long) -> Unit, onKeyword: (String) -> Unit) {
     val ctx = LocalContext.current
     val m = d.media
     val photoInfo by produceState(PhotoInfo(), m.id) { if (!m.isVideo) value = MediaInfo.read(ctx, m.uri) }
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+    val divider = @Composable { HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant) }
+    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp).padding(top = 12.dp, bottom = 24.dp)) {
+        Box(
+            Modifier.align(Alignment.CenterHorizontally).width(36.dp).height(4.dp).clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
+        )
+        Spacer(Modifier.height(16.dp))
         Text(DateLabels.dateTime(m.takenAt), style = MaterialTheme.typography.headlineSmall)
-        d.caption?.let { caption ->
-            Spacer(Modifier.height(8.dp))
-            Text(caption, style = MaterialTheme.typography.bodyLarge)
-        }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
         InfoRow("File", m.name)
         d.path?.let { InfoRow("Folder", it.trimEnd('/')) }
         InfoRow("Size", "${m.width} × ${m.height} · ${formatBytes(m.sizeBytes)}" + if (m.isVideo) " · ${formatDuration(m.durationMs)}" else "")
@@ -339,23 +410,43 @@ private fun InfoSheet(d: MediaDetail, onPerson: (Long) -> Unit, onAlbum: (Long) 
                 }
             }
         }
+        if (d.caption != null || m.keywords.isNotEmpty()) {
+            divider()
+            Text("DESCRIPTION", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            d.caption?.let { caption ->
+                Spacer(Modifier.height(6.dp))
+                Text(caption, style = MaterialTheme.typography.bodyLarge)
+            }
+            if (m.keywords.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                KeywordChips(m.keywords, onClick = onKeyword)
+            }
+        } else if (!m.isVideo) {
+            divider()
+            Text(
+                "The AI hasn't described this photo yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (d.people.isNotEmpty()) {
-            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            divider()
             Text("PEOPLE", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 d.people.forEach { p -> PersonBubble(p, size = 56) { onPerson(p.id) } }
             }
         }
-        if (d.albums.isNotEmpty() || m.tags.isNotEmpty()) {
-            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        if (d.albums.isNotEmpty()) {
+            divider()
+            Text("ALBUMS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 d.albums.forEach { a -> DotChip(a.name, onClick = { onAlbum(a.id) }, selected = true) }
-                m.tags.forEach { t -> DotChip(PhotoTags.byId(t)?.label ?: t, onClick = { onTag(t) }) }
             }
         }
         if (d.text.isNotBlank()) {
-            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            divider()
             Text("TEXT IN PHOTO", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(6.dp))
             SelectionContainer { Text(d.text, style = MaterialTheme.typography.bodyMedium) }

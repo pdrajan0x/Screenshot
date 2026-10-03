@@ -11,9 +11,8 @@ import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import coil3.video.VideoFrameDecoder
-import com.pdrajan.dot.llm.ModelBundle
-import com.pdrajan.dot.llm.Models
 import com.pdrajan.dot.llm.PowerGate
+import com.pdrajan.dot.llm.SharedModel
 import com.pdrajan.dot.media.MediaStoreSource
 import com.pdrajan.dotgallery.data.GalleryDatabase
 import com.pdrajan.dotgallery.data.GalleryRepository
@@ -70,12 +69,12 @@ class GalleryContainer(val context: Context) {
     val media = MediaStoreSource(context)
     val hub = ModelHub(context, scope)
     val engine = IndexEngine(context, repo, settings, hub, media)
-    val scheduler = IndexScheduler(context) { settings.backlogWhileCharging.value }
+    val scheduler = IndexScheduler(context) { !settings.processing.value.onBattery }
     val locked = LockedFolder(context, repo)
-    val power = PowerGate(context)
+    val power = PowerGate(context) { settings.processing.value }
 
-    /** Photo descriptions: a small vision model, downloaded once into Download/AI Models. */
-    val describerModel = ModelBundle(context, Models.PHOTO_TEXT.label, listOf(Models.PHOTO_TEXT, Models.PHOTO_VISION))
+    /** The AI model both Dot apps share (Download/AI Models): descriptions and keywords. */
+    val describerModel = SharedModel.bundle(context)
     val describer = PhotoDescriber(context, repo, settings, describerModel, power, scope)
     private var downloadJob: Job? = null
 
@@ -90,25 +89,17 @@ class GalleryContainer(val context: Context) {
         job?.cancel()
         job = scope.launch {
             runCatching { engine.sync() }
-            // While the app is open, keep going batch after batch if the phone is charging
-            // (or the user allowed processing on battery); otherwise just the newest batch.
-            while (isActive && engine.process(limit = 80) > 0 && unrestricted()) Unit
-            // Descriptions (a second or two of full CPU each): all of them while charging, only the
-            // newest few on battery, and only when PowerGate allows.
-            if (power.isCharging) {
-                while (isActive && describer.process(limit = DESCRIBE_BATCH) > 0 && power.isCharging) Unit
-            } else {
-                describer.process(limit = 6, since = System.currentTimeMillis() - RECENT_MILLIS)
-            }
-            if (repo.counts().pending > 0) {
-                scheduler.scheduleBacklog()
-            } else if (describer.available && repo.captionCounts().second > 0) {
-                scheduler.scheduleBacklog(requireCharging = true)
-            }
+            // The newest batch is always analysed while the app is open; the rest, and the AI
+            // descriptions (several seconds each), follow Settings → Processing.
+            engine.process(limit = 80)
+            while (isActive && allowed() && engine.process(limit = 80) > 0) Unit
+            while (isActive && describer.process(limit = DESCRIBE_BATCH) > 0) Unit
+            val left = repo.counts().pending > 0 || (describer.available && repo.captionCounts().second > 0)
+            if (left && settings.processing.value.background) scheduler.scheduleBacklog()
         }
     }
 
-    private fun unrestricted() = power.isCharging || !settings.backlogWhileCharging.value
+    private fun allowed() = power.blocker() == null
 
     /** Left the app: work started from the screen stops (even "Process now"), unless the phone is charging. */
     fun onBackground() {
@@ -130,7 +121,7 @@ class GalleryContainer(val context: Context) {
         }
     }
 
-    /** Downloads the description model (about 320 MB, resumable), then starts describing. */
+    /** Downloads the AI model (about 1.3 GB, resumable), then starts describing. */
     fun downloadDescriber() {
         if (downloadJob?.isActive == true) return
         downloadJob = scope.launch {
@@ -163,6 +154,5 @@ class GalleryContainer(val context: Context) {
 
     private companion object {
         const val DESCRIBE_BATCH = 10
-        const val RECENT_MILLIS = 2L * 24 * 60 * 60_000
     }
 }

@@ -16,7 +16,7 @@ import java.time.Duration
 /**
  * Background indexing. Two flavours:
  *  - "new": wakes when MediaStore images change (no polling), handles the latest screenshots.
- *  - "backlog": older screenshots, by default only while charging.
+ *  - "backlog": older screenshots and summaries, following Settings → Processing.
  */
 class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
@@ -28,31 +28,37 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
         runCatching { container.engine.sync() }
 
-        // The summary model (seconds of full CPU each) never runs in the background on battery:
-        // it waits for the charger, or for the app to be opened. Unplugging stops it mid-batch.
+        // Settings → Processing decides whether the AI model (seconds of full CPU per screenshot)
+        // may run with the app closed: never with background processing off, on battery only when
+        // allowed and above the chosen level. Unplugging or a warm phone stops it mid-batch.
         val power = container.power
-        val summariesStopped = { isStopped || !power.isCharging }
+        val blocker = power.blocker(foreground = false)
+        val stopped = { isStopped || power.blocker(foreground = false) != null }
         var indexed = 0
         var summarised = 0
         if (mode == MODE_NEW) {
-            indexed = container.engine.process(limit = 30, deadline = deadline) { isStopped }
-            if (power.isCharging) {
+            // Reading new screenshots is quick; it waits only if background processing is off.
+            if (container.settings.processing.value.background) {
+                indexed = container.engine.process(limit = 30, deadline = deadline) { isStopped }
+            }
+            if (blocker == null) {
                 summarised = container.summaries.process(
-                    limit = 3, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline, isStopped = summariesStopped,
+                    limit = 3, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline, foreground = false, isStopped = stopped,
                 )
             }
-        } else {
-            while (!isStopped && System.currentTimeMillis() < deadline) {
-                val n = container.engine.process(limit = 50, deadline = deadline) { isStopped }
+        } else if (blocker == null) {
+            while (!stopped() && System.currentTimeMillis() < deadline) {
+                val n = container.engine.process(limit = 50, deadline = deadline, isStopped = stopped)
                 if (n == 0) break
                 indexed += n
             }
-            while (!summariesStopped() && System.currentTimeMillis() < deadline) {
-                val n = container.summaries.process(limit = 5, deadline = deadline, isStopped = summariesStopped)
+            while (!stopped() && System.currentTimeMillis() < deadline) {
+                val n = container.summaries.process(limit = 5, deadline = deadline, foreground = false, isStopped = stopped)
                 if (n == 0) break
                 summarised += n
             }
         }
+        if (summarised > 0) container.engine.apps.run()
 
         val toRead = container.repo.counts().pending
         val toSummarise = if (container.summaries.available) container.repo.summaryCounts().waiting else 0
@@ -61,14 +67,12 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         // Only chain another backlog run when this one got somewhere; a run that did nothing
         // (a persistent error) waits for the next app open or screenshot instead of looping.
         val progressed = indexed + summarised > 0 || mode == MODE_NEW
-        if (progressed && toRead > 0) {
+        if (progressed && (toRead > 0 || toSummarise > 0) && container.settings.processing.value.background) {
             scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
-        } else if (progressed && toSummarise > 0) {
-            scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG, requireCharging = true)
         }
         DotLog.i(
             "worker: $mode run finished · $indexed read, $summarised summarised" +
-                (if (power.isCharging) "" else " (summaries wait for the charger)") + " · $toRead to read, $toSummarise to summarise",
+                (blocker?.let { " (paused: $it)" } ?: "") + " · $toRead to read, $toSummarise to summarise",
         )
         return Result.success()
     }
@@ -80,7 +84,7 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     }
 }
 
-class IndexScheduler(private val context: Context, private val backlogWhileCharging: () -> Boolean) {
+class IndexScheduler(private val context: Context, private val chargingOnly: () -> Boolean) {
 
     private val workManager get() = WorkManager.getInstance(context)
 
@@ -103,11 +107,8 @@ class IndexScheduler(private val context: Context, private val backlogWhileCharg
         )
     }
 
-    /**
-     * Older screenshots. Reading them follows the "only while charging" setting; when only
-     * summaries are left ([requireCharging]), the job always waits for the charger.
-     */
-    fun scheduleBacklog(afterCurrent: Boolean = false, requireCharging: Boolean = backlogWhileCharging()) {
+    /** Older screenshots and summaries; waits for the charger unless processing on battery is allowed. */
+    fun scheduleBacklog(afterCurrent: Boolean = false, requireCharging: Boolean = chargingOnly()) {
         val constraints = Constraints.Builder()
             .setRequiresBatteryNotLow(true)
             .setRequiresCharging(requireCharging)
@@ -127,6 +128,10 @@ class IndexScheduler(private val context: Context, private val backlogWhileCharg
     fun rescheduleBacklog() {
         workManager.cancelUniqueWork(WORK_BACKLOG)
         scheduleBacklog()
+    }
+
+    fun cancelBacklog() {
+        workManager.cancelUniqueWork(WORK_BACKLOG)
     }
 
     private companion object {
