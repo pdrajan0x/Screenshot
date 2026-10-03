@@ -37,6 +37,9 @@ struct Engine {
     int n_batch = 0;
     std::atomic<bool> cancel{false};
     std::string last_error;
+    // Tokens held in the KV cache (sequence 0, from position 0). A new prompt that starts the same
+    // way (the system prompt is identical for every screenshot) only decodes what differs.
+    std::vector<llama_token> cached;
 };
 
 void log_callback(ggml_log_level level, const char *text, void *) {
@@ -64,6 +67,40 @@ std::vector<llama_token> tokenize(const llama_vocab *vocab, const std::string &t
         llama_tokenize(vocab, text.c_str(), static_cast<int32_t>(text.size()), tokens.data(), n, true, true);
     }
     return tokens;
+}
+
+void reset_cache(Engine *engine) {
+    llama_memory_clear(llama_get_memory(engine->ctx), true);
+    engine->cached.clear();
+}
+
+// Brings the KV cache to exactly [tokens], reusing the longest prefix already there. Afterwards the
+// logits of the last token are available. Returns false (with last_error set) on failure.
+bool feed(Engine *engine, const std::vector<llama_token> &tokens) {
+    size_t common = 0;
+    while (common < engine->cached.size() && common < tokens.size() && engine->cached[common] == tokens[common]) common++;
+    // The last token is always decoded again so its logits are fresh.
+    if (common == tokens.size()) common = tokens.size() - 1;
+    if (!llama_memory_seq_rm(llama_get_memory(engine->ctx), 0, static_cast<llama_pos>(common), -1)) {
+        reset_cache(engine);
+        common = 0;
+    }
+    engine->cached.resize(common);
+    for (size_t i = common; i < tokens.size(); i += static_cast<size_t>(engine->n_batch)) {
+        const int n = static_cast<int>(std::min(tokens.size() - i, static_cast<size_t>(engine->n_batch)));
+        std::vector<llama_token> chunk(tokens.begin() + static_cast<long>(i), tokens.begin() + static_cast<long>(i) + n);
+        if (llama_decode(engine->ctx, llama_batch_get_one(chunk.data(), n)) != 0) {
+            reset_cache(engine);
+            engine->last_error = "prompt decode failed";
+            return false;
+        }
+        engine->cached.insert(engine->cached.end(), chunk.begin(), chunk.end());
+        if (engine->cancel) {
+            engine->last_error = "cancelled";
+            return false;
+        }
+    }
+    return true;
 }
 
 std::string piece(const llama_vocab *vocab, llama_token token) {
@@ -177,8 +214,6 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeGenerate(JNIEnv *env, jclass, jlong h
         return nullptr;
     }
 
-    llama_memory_clear(llama_get_memory(engine->ctx), true);
-
     llama_sampler *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     if (!grammar.empty()) {
         llama_sampler *g = llama_sampler_init_grammar(engine->vocab, grammar.c_str(), "root");
@@ -198,19 +233,9 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeGenerate(JNIEnv *env, jclass, jlong h
         llama_sampler_chain_add(smpl, llama_sampler_init_dist(static_cast<uint32_t>(seed)));
     }
 
-    // Prompt, in n_batch-sized chunks.
-    for (size_t i = 0; i < tokens.size(); i += static_cast<size_t>(engine->n_batch)) {
-        const int n = static_cast<int>(std::min(tokens.size() - i, static_cast<size_t>(engine->n_batch)));
-        if (llama_decode(engine->ctx, llama_batch_get_one(tokens.data() + i, n)) != 0) {
-            llama_sampler_free(smpl);
-            engine->last_error = "prompt decode failed";
-            return nullptr;
-        }
-        if (engine->cancel) {
-            llama_sampler_free(smpl);
-            engine->last_error = "cancelled";
-            return nullptr;
-        }
+    if (!feed(engine, tokens)) {
+        llama_sampler_free(smpl);
+        return nullptr;
     }
 
     std::string out;
@@ -223,9 +248,11 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeGenerate(JNIEnv *env, jclass, jlong h
         if (llama_vocab_is_eog(engine->vocab, token)) break;
         out += piece(engine->vocab, token);
         if (llama_decode(engine->ctx, llama_batch_get_one(&token, 1)) != 0) {
+            reset_cache(engine);
             engine->last_error = "decode failed";
             break;
         }
+        engine->cached.push_back(token);
     }
     llama_sampler_free(smpl);
     if (engine->last_error == "cancelled") return nullptr;

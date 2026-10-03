@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -34,6 +36,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -58,13 +61,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -72,12 +73,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -101,6 +104,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -147,6 +151,9 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
         current.value = id
     }
 
+    /** Each page shows its own screenshot's details. */
+    fun detailOf(id: Long): Flow<ShotDetail?> = c.repo.observeDetail(id)
+
     fun toggleFavorite() = viewModelScope.launch { c.repo.toggleFavorite(current.value) }
     fun saveNote(id: Long, note: String) = viewModelScope.launch { c.repo.setNote(id, note) }
     fun addTo(collectionId: Long) = viewModelScope.launch { c.repo.addToCollection(collectionId, listOf(current.value)) }
@@ -178,8 +185,14 @@ fun DetailScreen(
     val ids by vm.ids.collectAsStateWithLifecycle()
     val detail by vm.detail.collectAsStateWithLifecycle()
     var chrome by remember { mutableStateOf(true) }
-    var showSheet by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
+    // Swiping up on a screenshot scrolls its details into view; the buttons ask the current page to.
+    var detailsShown by remember { mutableStateOf(false) }
+    var pageRequest by remember { mutableStateOf<PageRequest?>(null) }
+    fun requestDetails(open: Boolean) {
+        pageRequest = PageRequest(vm.current.value, open, (pageRequest?.serial ?: 0) + 1)
+    }
+    BackHandler(enabled = detailsShown) { requestDetails(open = false) }
     val ctx = LocalContext.current
     val deleter = rememberDeleteLauncher()
 
@@ -202,11 +215,15 @@ fun DetailScreen(
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
                     val id = list.getOrNull(page) ?: return@HorizontalPager
-                    ZoomableAsyncImage(
-                        model = shotUri(id),
-                        contentDescription = "Screenshot",
-                        modifier = Modifier.fillMaxSize(),
-                        onClick = { chrome = !chrome },
+                    ShotPage(
+                        id = id,
+                        vm = vm,
+                        isCurrent = page == pager.currentPage,
+                        request = pageRequest,
+                        onToggleChrome = { chrome = !chrome },
+                        onDetailsShown = { detailsShown = it },
+                        onOpenShot = onOpenShot,
+                        onOpenCollection = onOpenCollection,
                     )
                 }
             }
@@ -216,7 +233,10 @@ fun DetailScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
+                    .background(
+                        if (detailsShown) Brush.verticalGradient(listOf(Color.Black, Color.Black.copy(alpha = 0.92f)))
+                        else Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)),
+                    )
                     .statusBarsPadding()
                     .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -247,13 +267,28 @@ fun DetailScreen(
             }
         }
 
-        AnimatedVisibility(visible = chrome, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
+        AnimatedVisibility(visible = chrome && !detailsShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
             Column(
                 Modifier
                     .fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
                     .navigationBarsPadding(),
             ) {
+                // A handle with the title: tap it (or swipe the screenshot up) for the summary and details.
+                Column(
+                    Modifier.fillMaxWidth().clickable { requestDetails(open = true) }.padding(horizontal = 24.dp, vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(Modifier.width(36.dp).height(4.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.5f)))
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        detail?.shot?.title ?: "Swipe up for details",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 val actions = detail?.entities?.flatMap { entityActions(it) }.orEmpty()
                 if (actions.isNotEmpty()) {
                     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -282,7 +317,7 @@ fun DetailScreen(
                         "Favourite",
                         tint = if (d?.shot?.favorite == true) DotTheme.extra.accent else Color.White,
                     ) { vm.toggleFavorite() }
-                    ViewerAction(Icons.Rounded.Info, "Details") { showSheet = true }
+                    ViewerAction(Icons.Rounded.Info, "Details") { requestDetails(open = true) }
                     ViewerAction(Icons.Rounded.Delete, "Delete") {
                         val shot = d?.shot ?: return@ViewerAction
                         deleter.delete(listOf(shot.uri)) { ok ->
@@ -297,15 +332,61 @@ fun DetailScreen(
         }
     }
 
-    if (showSheet) {
-        val d = detail
-        if (d != null) {
-            ModalBottomSheet(
-                onDismissRequest = { showSheet = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+}
+
+/** Scroll page [id] to its details ([open]) or back to the picture; [serial] makes each tap a new request. */
+private data class PageRequest(val id: Long, val open: Boolean, val serial: Int)
+
+/**
+ * One screenshot, full screen, with its title, summary and details below it: swipe up to read
+ * them, like Pixel Screenshots. Pinch and double-tap zoom the picture.
+ */
+@Composable
+private fun ShotPage(
+    id: Long,
+    vm: DetailViewModel,
+    isCurrent: Boolean,
+    request: PageRequest?,
+    onToggleChrome: () -> Unit,
+    onDetailsShown: (Boolean) -> Unit,
+    onOpenShot: (Long) -> Unit,
+    onOpenCollection: (Long) -> Unit,
+) {
+    val detail by remember(id) { vm.detailOf(id) }.collectAsStateWithLifecycle(null)
+    val scroll = rememberScrollState()
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val viewport = maxHeight
+        val viewportPx = with(LocalDensity.current) { viewport.toPx() }
+        // Buttons: bring the details up to just below the middle of the screen, or go back to the picture.
+        LaunchedEffect(request) {
+            val r = request ?: return@LaunchedEffect
+            if (r.id == id) scroll.animateScrollTo(if (r.open) (viewportPx * 0.55f).toInt() else 0)
+        }
+        if (isCurrent) {
+            LaunchedEffect(scroll, viewportPx) {
+                snapshotFlow { scroll.value > viewportPx * 0.12f }.distinctUntilChanged().collect { onDetailsShown(it) }
+            }
+        }
+        Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
+            Box(Modifier.fillMaxWidth().height(viewport)) {
+                ZoomableAsyncImage(
+                    model = shotUri(id),
+                    contentDescription = "Screenshot",
+                    modifier = Modifier.fillMaxSize(),
+                    onClick = { onToggleChrome() },
+                )
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = viewport * 0.6f),
             ) {
-                DetailSheet(d, vm, onOpenShot = { showSheet = false; onOpenShot(it) }, onOpenCollection = { showSheet = false; onOpenCollection(it) })
+                val d = detail
+                if (d != null) {
+                    DetailSheet(d, vm, onOpenShot = onOpenShot, onOpenCollection = onOpenCollection)
+                } else {
+                    Spacer(Modifier.fillMaxWidth().height(160.dp))
+                }
             }
         }
     }
@@ -347,7 +428,12 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
         )
     }
 
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
+    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(top = 12.dp, bottom = 24.dp)) {
+        Box(
+            Modifier.align(Alignment.CenterHorizontally).width(36.dp).height(4.dp).clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
+        )
+        Spacer(Modifier.height(16.dp))
         Column(Modifier.padding(horizontal = 20.dp)) {
             val title = d.shot.title
             Text(title ?: d.shot.app ?: "Screenshot", style = MaterialTheme.typography.headlineSmall)

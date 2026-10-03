@@ -15,7 +15,7 @@ import com.pdrajan.dot.media.DotLog
 
 /** Where the source app came from, best first. */
 enum class AppSource(val code: String) {
-    /** The system's usage history: exact. */
+    /** The system's usage history (earlier versions, with Usage access): exact. */
     USAGE("usage"),
     /** The phone maker put it in the file name. */
     FILE("file"),
@@ -50,7 +50,8 @@ data class ScreenshotAnalysis(
 
 /**
  * Full on-device pipeline for one image: decode → OCR (with line positions) → CLIP crops →
- * source app → categories, entities and page link.
+ * source app (file name, or recognised; the library-wide guess comes later) → categories,
+ * entities and page link.
  */
 class ScreenshotAnalyzer(
     private val context: Context,
@@ -59,12 +60,11 @@ class ScreenshotAnalyzer(
     private val reader: TextReader?,
     private val classifier: CategoryClassifier,
     private val appLook: AppLookClassifier? = null,
-    private val foreground: ForegroundAppResolver? = null,
     private val extractor: EntityExtractor = EntityExtractor(),
 ) {
     private var loggedOcrError = false
 
-    fun analyze(uri: Uri, displayName: String, takenAt: Long = 0L, runOcr: Boolean = true, maxCrops: Int = 3): ScreenshotAnalysis {
+    fun analyze(uri: Uri, displayName: String, runOcr: Boolean = true, maxCrops: Int = 3): ScreenshotAnalysis {
         val start = System.nanoTime()
         val bitmap = BitmapLoader.load(context.contentResolver, uri)
         try {
@@ -88,7 +88,7 @@ class ScreenshotAnalyzer(
             }
             val text = ocr.text
             val crops = clip.embedImage(bitmap, maxCrops)
-            val app = resolveApp(displayName, takenAt, text, crops)
+            val app = resolveApp(displayName, text, crops)
             val browser = AppRecognizer.isBrowser(app?.label, app?.packageName)
             val pageUrl = PageLink.find(ocr.lines, browser)
             val categories = classifier.classify(crops, text, app?.label).categories
@@ -112,8 +112,7 @@ class ScreenshotAnalyzer(
 
     private class ResolvedApp(val label: String, val packageName: String?, val source: AppSource)
 
-    private fun resolveApp(displayName: String, takenAt: Long, text: String, crops: List<FloatArray>): ResolvedApp? {
-        foreground?.appAt(takenAt)?.let { return ResolvedApp(it.label, it.packageName, AppSource.USAGE) }
+    private fun resolveApp(displayName: String, text: String, crops: List<FloatArray>): ResolvedApp? {
         SourceApp.fromFileName(displayName)?.let { hint ->
             hint.label?.let { return ResolvedApp(it, null, AppSource.FILE) }
             hint.packageName?.let { return ResolvedApp(label(it), it, AppSource.FILE) }

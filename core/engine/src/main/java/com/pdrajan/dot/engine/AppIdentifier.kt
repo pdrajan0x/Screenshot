@@ -2,7 +2,6 @@ package com.pdrajan.dot.engine
 
 import kotlin.math.abs
 import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.min
 
 /** An app a screenshot could have come from: installed now, seen before, or a well-known one. */
@@ -13,7 +12,7 @@ data class AppCandidate(
     val prompts: List<String>,
 )
 
-/** A screenshot whose app is certain (usage history, file name, or set by the user). */
+/** A screenshot whose app is certain (file name, set by the user, or from older versions' usage history). */
 class KnownShot(val label: String, val packageName: String?, val takenAt: Long, crops: List<FloatArray>) {
     /** Null for screenshots not embedded yet; they still count for timing. */
     val embedding: FloatArray? = if (crops.isEmpty()) null else VectorMath.mean(crops)
@@ -25,8 +24,7 @@ class KnownShot(val label: String, val packageName: String?, val takenAt: Long, 
  *  - what the screen looks like, against "a screenshot of the {app} app" for every candidate (CLIP);
  *  - tell-tale text and the app's own name on screen;
  *  - the user's own screenshots whose app is certain: near-identical looking ones, and ones taken
- *    within a few minutes (people take screenshots in bursts);
- *  - how much each app was used around that time (Android's usage totals), a gentle prior.
+ *    within a few minutes (people take screenshots in bursts).
  * The scores are combined in log space; the softmax of the winner is its confidence.
  */
 class AppIdentifier(
@@ -62,11 +60,7 @@ class AppIdentifier(
 
     val size: Int get() = entries.size
 
-    /**
-     * @param usageMinutes minutes each package was in the foreground around [takenAt] (from
-     *   Android's usage totals), or null when unknown.
-     */
-    fun identify(text: String, crops: List<FloatArray>, takenAt: Long, usageMinutes: Map<String, Double>?): Result? {
+    fun identify(text: String, crops: List<FloatArray>, takenAt: Long): Result? {
         if (entries.isEmpty()) return null
         val lower = text.lowercase()
         val clues = AppRecognizer.textScores(lower)
@@ -84,7 +78,8 @@ class AppIdentifier(
             val k = key(e.candidate.label)
             s += neighbours[k] ?: 0.0
             s += nearby[k] ?: 0.0
-            s += prior(e.candidate.packageName, usageMinutes)
+            // Apps that aren't installed are less likely, but stay possible.
+            if (e.candidate.packageName == null) s += NOT_INSTALLED
             scores[i] = s
         }
         val max = scores.max()
@@ -126,13 +121,6 @@ class AppIdentifier(
         return votes
     }
 
-    private fun prior(packageName: String?, usageMinutes: Map<String, Double>?): Double {
-        if (usageMinutes == null) return if (packageName == null) -0.5 else 0.0
-        if (packageName == null) return -1.0
-        val minutes = usageMinutes[packageName] ?: 0.0
-        return if (minutes < 1.0) -2.0 else min(1.5, 0.35 * ln(1.0 + minutes / 10.0))
-    }
-
     companion object {
         private const val CLIP_WEIGHT = 0.6f
         private const val TEXT_WEIGHT = 3.0
@@ -143,6 +131,7 @@ class AppIdentifier(
         private const val KNN_CAP = 6.0
         private const val NEARBY_MILLIS = 3 * 60_000L
         private const val NEARBY_WEIGHT = 2.5
+        private const val NOT_INSTALLED = -0.5
 
         fun key(label: String) = label.trim().lowercase()
 

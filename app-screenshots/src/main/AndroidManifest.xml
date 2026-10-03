@@ -7,10 +7,6 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    <!-- "Usage access" (granted by the user in Settings): which app was on screen when a screenshot was taken. -->
-    <uses-permission
-        android:name="android.permission.PACKAGE_USAGE_STATS"
-        tools:ignore="ProtectedPermissions" />
     <!-- Personal sideloaded app: lets Xiaomi-style screenshot names (package ids) show real app names. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"

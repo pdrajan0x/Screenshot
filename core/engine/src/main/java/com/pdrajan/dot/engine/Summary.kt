@@ -41,7 +41,7 @@ object SummaryPrompt {
     fun build(app: String?, screenText: String, thinkingModel: Boolean = true): String {
         val text = clip(screenText.trim(), MAX_SCREEN_CHARS)
         val user = buildString {
-            append("App: ").append(app?.takeIf { it.isNotBlank() } ?: "unknown").append('\n')
+            app?.takeIf { it.isNotBlank() }?.let { append("App: ").append(it).append('\n') }
             append("Screen text:\n").append(text.ifEmpty { "(no text on screen)" })
         }
         return buildString {

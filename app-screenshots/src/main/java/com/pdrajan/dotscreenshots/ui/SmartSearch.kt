@@ -1,12 +1,7 @@
 package com.pdrajan.dotscreenshots.ui
 
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,7 +12,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,65 +22,26 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pdrajan.dot.design.DotOutlinedButton
 import com.pdrajan.dot.design.DotPrimaryButton
 import com.pdrajan.dot.design.DotTheme
-import com.pdrajan.dot.design.SettingsRow
 import com.pdrajan.dot.design.SettingsSwitchRow
 import com.pdrajan.dot.llm.ModelDownloader
 import com.pdrajan.dot.llm.ModelSource
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.SummaryCounts
 
-/** Whether Usage access is on, re-checked whenever the app comes back to the front. */
-@Composable
-fun rememberUsageAccess(c: AppContainer): Boolean {
-    var granted by remember { mutableStateOf(c.engine.foreground.hasAccess()) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        val now = c.engine.foreground.hasAccess()
-        // Just switched on: match recent screenshots to their apps.
-        if (now && !granted) c.onForeground()
-        granted = now
-    }
-    return granted
-}
-
-fun openUsageAccessSettings(context: Context) {
-    val withPackage = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.fromParts("package", context.packageName, null))
-    runCatching { context.startActivity(withPackage.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-        .recoverCatching { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-}
-
 private fun mb(bytes: Long) = "%,d MB".format(bytes / 1_000_000)
 
-/** Settings rows: source-app detection and the AI summary model. */
+/** Settings rows: the AI summary model. */
 @Composable
 fun SmartSearchSettings(c: AppContainer) {
-    val ctx = LocalContext.current
-    val usage = rememberUsageAccess(c)
-    SettingsRow(
-        title = "Know which app each screenshot is from",
-        subtitle = if (usage) {
-            "On · exact for new screenshots and as far back as Android's usage history goes (about a week); " +
-                "older ones get a best guess. Stays on this phone."
-        } else {
-            "Off · every screenshot still gets a best guess from how it looks. Switch on Usage access for Dot Screenshots " +
-                "to know new ones for sure."
-        },
-        icon = Icons.Rounded.Apps,
-        onClick = { openUsageAccessSettings(ctx) },
-    )
     SummaryModelPanel(c)
 }
 
@@ -174,15 +129,12 @@ private fun SummaryModelPanel(c: AppContainer) {
     }
 }
 
-/** Home card nudging towards Usage access and the summary model, until both are set up or dismissed. */
+/** Home card suggesting the summary model, until it's set up or dismissed. */
 @Composable
 fun SmartSearchTip(c: AppContainer, modifier: Modifier = Modifier) {
-    val ctx = LocalContext.current
     val dismissed by c.settings.smartTipDismissed.collectAsStateWithLifecycle()
-    val usage = rememberUsageAccess(c)
     val model by c.modelDownload.state.collectAsStateWithLifecycle()
-    val modelSetUp = model != ModelDownloader.State.Missing
-    if (dismissed || (usage && modelSetUp)) return
+    if (dismissed || model != ModelDownloader.State.Missing) return
     Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -191,16 +143,13 @@ fun SmartSearchTip(c: AppContainer, modifier: Modifier = Modifier) {
                 IconButton(onClick = { c.settings.dismissSmartTip() }) { Icon(Icons.Rounded.Close, "Dismiss") }
             }
             Text(
-                "Find a WhatsApp chat by searching \"whatsapp\", and get a title and summary for every screenshot — all on this phone.",
+                "Get a title, summary and keywords for every screenshot, written on this phone. Nothing is uploaded.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = 12.dp),
             )
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!usage) DotOutlinedButton("Detect apps", onClick = { openUsageAccessSettings(ctx) }, icon = Icons.Rounded.Apps)
-                if (!modelSetUp) DotOutlinedButton("Get summaries (${mb(c.modelDownload.spec.sizeBytes)})", onClick = { c.downloadModel() }, icon = Icons.Rounded.Download)
-            }
+            DotOutlinedButton("Get summaries (${mb(c.modelDownload.spec.sizeBytes)})", onClick = { c.downloadModel() }, icon = Icons.Rounded.Download)
         }
     }
 }

@@ -34,7 +34,8 @@ class SummaryTest {
         assertTrue(p.contains("App: WhatsApp\nScreen text:\nDeepanshu Arya"))
         assertTrue(p.endsWith("<|im_start|>assistant\n<think>\n\n</think>\n\n"))
         assertTrue(SummaryPrompt.build(null, "x", thinkingModel = false).endsWith("<|im_start|>assistant\n"))
-        assertTrue(SummaryPrompt.build(null, "x").contains("App: unknown"))
+        // An uncertain app isn't mentioned at all: an "App: unknown" line just gets copied into the answer.
+        assertTrue(SummaryPrompt.build(null, "x").contains("<|im_start|>user\nScreen text:\nx"))
     }
 
     @Test

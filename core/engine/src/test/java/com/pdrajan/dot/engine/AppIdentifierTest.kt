@@ -26,7 +26,7 @@ class AppIdentifierTest {
 
     @Test
     fun decisiveTextWins() {
-        val r = identifier().identify("Paid to Rahul\nGoogle transaction ID\nCICAgOj", emptyList(), 0L, null)!!
+        val r = identifier().identify("Paid to Rahul\nGoogle transaction ID\nCICAgOj", emptyList(), 0L)!!
         assertEquals("Google Pay", r.label)
         assertEquals("com.google.android.apps.nbu.paisa.user", r.packageName)
     }
@@ -34,7 +34,7 @@ class AppIdentifierTest {
     @Test
     fun looksLikeTheAppsPromptWithoutAnyText() {
         val look = promptVectors.getValue("a screenshot of the Swiggy app")
-        assertEquals("Swiggy", identifier().identify("", listOf(look, look), 0L, null)!!.label)
+        assertEquals("Swiggy", identifier().identify("", listOf(look, look), 0L)!!.label)
     }
 
     @Test
@@ -43,25 +43,25 @@ class AppIdentifierTest {
         // just like a screenshot the user took in WhatsApp.
         val shot = mix(axis() to 15f, promptVectors.getValue("a screenshot of a web page in a mobile browser") to 1f)
         val known = listOf(KnownShot("WhatsApp", "com.whatsapp", 1_000L, listOf(shot)))
-        assertEquals("Chrome", identifier().identify("", listOf(shot), 10_000_000L, null)!!.label)
-        assertEquals("WhatsApp", identifier(known).identify("", listOf(shot), 10_000_000L, null)!!.label)
+        assertEquals("Chrome", identifier().identify("", listOf(shot), 10_000_000L)!!.label)
+        assertEquals("WhatsApp", identifier(known).identify("", listOf(shot), 10_000_000L)!!.label)
     }
 
     @Test
     fun screenshotsTakenMinutesApartShareTheirApp() {
         val known = listOf(KnownShot("Swiggy", "in.swiggy.android", 1_000_000L, listOf(axis())))
-        val r = identifier(known).identify("Order details", emptyList(), 1_000_000L + 60_000L, null)!!
+        val r = identifier(known).identify("Order details", emptyList(), 1_000_000L + 60_000L)!!
         assertEquals("Swiggy", r.label)
         // Hours later the burst is over: no reason to prefer it.
-        val later = identifier(known).identify("Order details", emptyList(), 1_000_000L + 3 * 3_600_000L, null)!!
+        val later = identifier(known).identify("Order details", emptyList(), 1_000_000L + 3 * 3_600_000L)!!
         assertTrue(later.confidence < r.confidence)
     }
 
     @Test
-    fun unusedAppsArePenalised() {
-        val usage = mapOf("com.whatsapp" to 600.0, "com.android.chrome" to 30.0)
-        val r = identifier().identify("", emptyList(), 0L, usage)!!
-        assertEquals("WhatsApp", r.label)
+    fun appsThatArentInstalledAreLessLikely() {
+        val known = listOf(KnownShot("Zomato", null, 0L, listOf(axis())))
+        // Nothing to go on: an installed app wins over one only seen in the past.
+        assertTrue(identifier(known).identify("", emptyList(), 50_000_000L)!!.label != "Zomato")
     }
 
     @Test
@@ -69,14 +69,14 @@ class AppIdentifierTest {
         val known = listOf(KnownShot("Zomato", null, 0L, listOf(axis())))
         val id = identifier(known)
         assertEquals(apps.size + 1, id.size)
-        assertEquals("Zomato", id.identify("zomato gold", emptyList(), 50_000_000L, null)!!.label)
+        assertEquals("Zomato", id.identify("zomato gold", emptyList(), 50_000_000L)!!.label)
     }
 
     @Test
     fun alwaysAnswersWithAConfidence() {
-        val r = identifier().identify("", emptyList(), 0L, null)!!
+        val r = identifier().identify("", emptyList(), 0L)!!
         assertTrue(r.confidence in 0f..1f)
-        assertNull(AppIdentifier(emptyList(), emptyMap(), 100f, emptyList()).identify("x", emptyList(), 0L, null))
+        assertNull(AppIdentifier(emptyList(), emptyMap(), 100f, emptyList()).identify("x", emptyList(), 0L))
     }
 
     @Test

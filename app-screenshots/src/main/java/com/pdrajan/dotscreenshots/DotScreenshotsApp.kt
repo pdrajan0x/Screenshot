@@ -22,6 +22,7 @@ import com.pdrajan.dotscreenshots.data.ShotsRepository
 import com.pdrajan.dotscreenshots.index.IndexEngine
 import com.pdrajan.dotscreenshots.index.IndexScheduler
 import com.pdrajan.dotscreenshots.index.ModelHub
+import com.pdrajan.dotscreenshots.index.PowerGate
 import com.pdrajan.dotscreenshots.index.SummaryEngine
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -70,7 +71,8 @@ class AppContainer(val context: Context) {
     val engine = IndexEngine(context, repo, settings, hub, media)
     val scheduler = IndexScheduler(context) { settings.backlogWhileCharging.value }
     val modelDownload = ModelDownloader(context, Models.SUMMARY)
-    val summaries = SummaryEngine(context, repo, settings, modelDownload, scope)
+    val power = PowerGate(context)
+    val summaries = SummaryEngine(context, repo, settings, modelDownload, power, scope)
 
     init {
         // Earlier versions kept the model in app storage; it now lives in Download/AI Models.
@@ -101,16 +103,14 @@ class AppContainer(val context: Context) {
             if (unrestricted()) {
                 while (isActive && summaries.process(limit = SUMMARY_BATCH) > 0 && unrestricted()) Unit
             } else {
-                summaries.process(limit = 5, since = System.currentTimeMillis() - RECENT_MILLIS)
+                // On battery only the newest few, and only when PowerGate allows.
+                summaries.process(limit = 3, since = System.currentTimeMillis() - RECENT_MILLIS)
             }
             if (repo.counts().pending > 0 || (summaries.available && repo.summaryCounts().waiting > 0)) scheduler.scheduleBacklog()
         }
     }
 
-    private fun unrestricted() = isCharging() || !settings.backlogWhileCharging.value
-
-    private fun isCharging(): Boolean =
-        runCatching { context.getSystemService(android.os.BatteryManager::class.java).isCharging }.getOrDefault(false)
+    private fun unrestricted() = power.isCharging || !settings.backlogWhileCharging.value
 
     fun onBackground() {
         if (!_backlogRunning.value) foregroundJob?.cancel()
@@ -125,7 +125,7 @@ class AppContainer(val context: Context) {
             try {
                 runCatching { engine.sync() }
                 while (isActive && engine.process(limit = 50) > 0) Unit
-                while (isActive && summaries.process(limit = SUMMARY_BATCH) > 0) Unit
+                while (isActive && summaries.process(limit = SUMMARY_BATCH, userAsked = true) > 0) Unit
             } finally {
                 _backlogRunning.value = false
             }

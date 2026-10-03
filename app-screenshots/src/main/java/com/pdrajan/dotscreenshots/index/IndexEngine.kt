@@ -5,7 +5,7 @@ import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaAccess
 import com.pdrajan.dot.media.MediaPermissions
 import com.pdrajan.dot.media.MediaStoreSource
-import com.pdrajan.dot.ml.ForegroundAppResolver
+import com.pdrajan.dot.ml.InstalledApps
 import com.pdrajan.dot.ml.ScreenshotAnalyzer
 import com.pdrajan.dot.ml.TextReader
 import com.pdrajan.dotscreenshots.data.Settings
@@ -57,11 +57,8 @@ class IndexEngine(
         return result
     }
 
-    /** Which app each screenshot came from, from the system's usage history (needs Usage access). */
-    val foreground = ForegroundAppResolver(context)
-
-    /** A source app for every screenshot: exact from usage history, or the best guess. */
-    val apps = AppIdentification(context, repo, hub, foreground)
+    /** A source app for every screenshot: from its file name, set by the user, or the best guess. */
+    val apps = AppIdentification(context, repo, hub, InstalledApps(context))
 
     /**
      * Analyses up to [limit] pending screenshots, newest first. Stops early at [deadline]
@@ -103,7 +100,7 @@ class IndexEngine(
                 val classifier = hub.classifier() ?: return 0
                 DotLog.i("process: category prompts ready in ${System.currentTimeMillis() - t} ms")
                 val appLook = runCatching { hub.appLook() }.onFailure { DotLog.e("process: app look prompts unavailable", it) }.getOrNull()
-                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier, appLook, foreground.takeIf { it.hasAccess() })
+                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier, appLook)
                 _progress.value = IndexProgress(running = true, total = pending.size)
                 var noText = 0
                 for (item in pending) {
@@ -113,7 +110,7 @@ class IndexEngine(
                     }
                     currentCoroutineContext().ensureActive()
                     try {
-                        val analysis = withContext(Dispatchers.Default) { analyzer.analyze(item.uri, item.name, item.takenAt) }
+                        val analysis = withContext(Dispatchers.Default) { analyzer.analyze(item.uri, item.name) }
                         repo.saveAnalysis(item.id, analysis)
                         recordTime(analysis.durationMs)
                         if (analysis.ocrPending) noText++

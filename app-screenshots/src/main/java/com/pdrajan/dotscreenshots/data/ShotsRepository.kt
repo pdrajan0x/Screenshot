@@ -511,6 +511,22 @@ class ShotsRepository(private val database: ShotsDatabase) {
         changed()
     }
 
+    /** Marks screenshots with less than [minChars] of text as summarised, without a summary. Returns how many. */
+    suspend fun skipTextless(minChars: Int): Int = withContext(Dispatchers.IO) {
+        val n = db.compileStatement(
+            "UPDATE shots SET summary_state = ? WHERE state = ? AND summary_state = ? AND ocr_pending = 0 " +
+                "AND LENGTH(TRIM(COALESCE(ocr_text, ''))) < ?",
+        ).use { st ->
+            st.bindLong(1, SUMMARY_DONE.toLong())
+            st.bindLong(2, IndexState.INDEXED.code.toLong())
+            st.bindLong(3, SUMMARY_PENDING.toLong())
+            st.bindLong(4, minChars.toLong())
+            st.executeUpdateDelete()
+        }
+        if (n > 0) changed()
+        n
+    }
+
     suspend fun markSummaryFailed(id: Long) = withContext(Dispatchers.IO) {
         db.execSQL("UPDATE shots SET summary_state = ? WHERE id = ?", arrayOf<Any>(SUMMARY_FAILED, id))
         changed()
@@ -525,27 +541,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
     fun observeSummaryCounts(): Flow<SummaryCounts> = observe { summaryCounts() }
 
     // ---------------------------------------------------------------- source app
-
-    /** Screenshots (taken after [since]) whose app isn't certain yet: (id, taken at). */
-    suspend fun uncertainAppShots(since: Long = 0L): List<Pair<Long, Long>> = withContext(Dispatchers.IO) {
-        db.rawQuery(
-            "SELECT id, taken_at FROM shots WHERE taken_at >= ? AND $UNCERTAIN_APP",
-            arrayOf(since.toString()),
-        ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0) to c.getLong(1)) } }
-    }
-
-    /** Records exact apps from usage history: (id, label, package). Summaries are redone to mention them. */
-    suspend fun setExactApps(found: List<Triple<Long, String, String>>) = withContext(Dispatchers.IO) {
-        if (found.isEmpty()) return@withContext
-        db.beginTransaction()
-        try {
-            for ((id, label, pkg) in found) setApp(id, label, pkg, "usage")
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-        changed()
-    }
 
     /** The user picked the app: it's certain from now on, and teaches the guesses for similar screenshots. */
     suspend fun setAppByUser(id: Long, label: String, packageName: String?) = withContext(Dispatchers.IO) {

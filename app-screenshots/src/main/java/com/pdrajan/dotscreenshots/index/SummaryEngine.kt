@@ -36,11 +36,13 @@ class SummaryEngine(
     private val repo: ShotsRepository,
     private val settings: Settings,
     val downloader: ModelDownloader,
+    private val power: PowerGate,
     private val scope: CoroutineScope,
 ) {
     private val lock = Mutex()
     @Volatile private var engine: LlamaEngine? = null
     private var releaseJob: Job? = null
+    private var lastBlocker: String? = null
 
     private val _progress = MutableStateFlow(IndexProgress())
     val progress: StateFlow<IndexProgress> = _progress.asStateFlow()
@@ -49,12 +51,21 @@ class SummaryEngine(
     val available: Boolean get() = settings.summariesEnabled.value && downloader.isReady()
 
     /**
-     * Summarises up to [limit] screenshots taken after [since], newest first. Returns how many
-     * summaries were written.
+     * Summarises up to [limit] screenshots taken after [since], newest first, while [PowerGate]
+     * allows ([userAsked]: the user tapped "Process now"). Returns how many summaries were written.
      */
-    suspend fun process(limit: Int, since: Long = 0L, deadline: Long = Long.MAX_VALUE, isStopped: () -> Boolean = { false }): Int =
+    suspend fun process(
+        limit: Int,
+        since: Long = 0L,
+        deadline: Long = Long.MAX_VALUE,
+        userAsked: Boolean = false,
+        isStopped: () -> Boolean = { false },
+    ): Int =
         lock.withLock {
             if (!available) return 0
+            // Screenshots without text have nothing to summarise; they never wake the model.
+            repo.skipTextless(MIN_TEXT_CHARS)
+            if (blocked(userAsked)) return 0
             val jobs = repo.summaryQueue(limit, since)
             if (jobs.isEmpty()) return 0
             releaseJob?.cancel()
@@ -64,7 +75,7 @@ class SummaryEngine(
             _progress.value = IndexProgress(running = true, total = jobs.size, preparing = engine == null)
             try {
                 val llm = engine ?: withContext(Dispatchers.IO) {
-                    downloader.source()?.let { LlamaEngine.load(context, it) }
+                    downloader.source()?.let { LlamaEngine.load(context, it, threads = power.threads()) }
                 }?.also { engine = it }
                 if (llm == null) {
                     DotLog.e("summary: model could not be loaded")
@@ -74,7 +85,7 @@ class SummaryEngine(
                 }
                 _progress.value = IndexProgress(running = true, total = jobs.size)
                 for (job in jobs) {
-                    if (isStopped() || System.currentTimeMillis() > deadline) break
+                    if (isStopped() || System.currentTimeMillis() > deadline || blocked(userAsked)) break
                     currentCoroutineContext().ensureActive()
                     val itemStart = System.currentTimeMillis()
                     try {
@@ -110,6 +121,16 @@ class SummaryEngine(
             written
         }
 
+    /** Logs when summaries pause or resume for battery or heat (once per change, not per call). */
+    private fun blocked(userAsked: Boolean): Boolean {
+        val reason = power.summaryBlocker(userAsked)
+        if (reason != lastBlocker) {
+            DotLog.i(if (reason != null) "summary: paused ($reason)" else "summary: allowed again")
+            lastBlocker = reason
+        }
+        return reason != null
+    }
+
     /** Generation is a blocking native call: on cancellation, tell llama.cpp to stop right away. */
     private suspend fun generate(llm: LlamaEngine, prompt: String): String = coroutineScope {
         val work = async(Dispatchers.Default) { llm.generate(prompt, SummaryPrompt.GRAMMAR, MAX_TOKENS) }
@@ -140,5 +161,6 @@ class SummaryEngine(
 
     private companion object {
         const val MAX_TOKENS = 160
+        const val MIN_TEXT_CHARS = 40
     }
 }
