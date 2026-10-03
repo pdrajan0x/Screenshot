@@ -88,6 +88,8 @@ def main():
     os.makedirs(fixtures_dir, exist_ok=True)
 
     torch.manual_seed(0)
+    # nn.MultiheadAttention's inference fast path (aten::_native_multi_head_attention) has no ONNX export.
+    torch.backends.mha.set_fastpath_enabled(False)
     model, _, _ = open_clip.create_model_and_transforms(MODEL, pretrained=PRETRAINED)
     model.eval()
     model = reparameterize(model)
