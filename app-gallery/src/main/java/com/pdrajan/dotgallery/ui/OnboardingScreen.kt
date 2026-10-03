@@ -89,7 +89,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
             )
             Spacer(Modifier.height(40.dp))
             Feature(Icons.Rounded.TravelExplore, "Search by what's in the photo", "\"dog on beach\", \"red car\", \"receipt\", \"food last month\"")
-            Feature(Icons.Rounded.Face, "People & pets", "Similar faces are grouped. Name them to search.")
+            Feature(Icons.Rounded.Face, "People", "Similar faces are grouped. Name them to search.")
             Feature(Icons.Rounded.AutoFixHigh, "Edit, trim, lock", "Crop, filters, markup, video trim and a locked folder.")
             Feature(Icons.Rounded.Lock, "Private by design", "AI runs on this phone. Nothing is uploaded.")
             Spacer(Modifier.weight(1f))

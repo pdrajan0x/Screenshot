@@ -175,9 +175,9 @@ class ShotsRepository(private val database: ShotsDatabase) {
     fun ocrPendingCount(): Int =
         db.rawQuery("SELECT COUNT(*) FROM shots WHERE ocr_pending = 1", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
-    /** Queues those screenshots again now that text can be read. */
+    /** Queues those screenshots again now that text can be read (and their summaries, written without it). */
     suspend fun requeueOcrPending(): Int = withContext(Dispatchers.IO) {
-        val n = db.compileStatement("UPDATE shots SET state = ${IndexState.PENDING.code}, ocr_pending = 0 WHERE ocr_pending = 1")
+        val n = db.compileStatement("UPDATE shots SET state = ${IndexState.PENDING.code}, ocr_pending = 0, summary_state = $SUMMARY_PENDING WHERE ocr_pending = 1")
             .use { it.executeUpdateDelete() }
         if (n > 0) changed()
         n
@@ -498,7 +498,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
         db.rawQuery(
             // A shaky guess of the app would only mislead the summary.
             "SELECT id, uri, CASE WHEN app_source IN ('usage', 'file', 'user') OR COALESCE(app_confidence, 0) >= 0.6 THEN app END, " +
-                "COALESCE(ocr_text,''), name FROM shots WHERE state = ? AND summary_state = ? AND ocr_pending = 0 AND taken_at >= ? " +
+                "COALESCE(ocr_text,''), name FROM shots WHERE state = ? AND summary_state = ? AND taken_at >= ? " +
                 "ORDER BY taken_at DESC LIMIT ?",
             arrayOf(IndexState.INDEXED.code.toString(), SUMMARY_PENDING.toString(), since.toString(), limit.toString()),
         ).use { c ->

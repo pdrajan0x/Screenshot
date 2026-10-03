@@ -202,5 +202,5 @@ fun KeywordChips(keywords: List<String>, onClick: (String) -> Unit, modifier: Mo
 /** The tiny red dot on thumbnails the AI has already described. */
 @Composable
 fun ProcessedDot(modifier: Modifier = Modifier) {
-    Box(modifier.padding(5.dp).size(5.dp).clip(CircleShape).background(DotTheme.extra.accent))
+    Box(modifier.padding(4.dp).size(4.dp).clip(CircleShape).background(DotTheme.extra.accent))
 }
