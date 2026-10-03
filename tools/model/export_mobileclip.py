@@ -204,6 +204,7 @@ def main():
     # Weight-only quantisation (activations stay fp32) first: it keeps CLIP's text geometry,
     # whereas dynamic int8 (activations quantised too) measured ~0.95 cosine.
     quant_variants = [
+        ("nbits8-matmul+nbits4-gather", lambda src, dst: nbits_mixed(src, dst, work)),
         ("nbits4-matmul-gather", lambda src, dst: nbits_quantize(src, dst, bits=4, ops=("MatMul", "Gather"))),
         ("nbits8-matmul-gather", lambda src, dst: nbits_quantize(src, dst, bits=8, ops=("MatMul", "Gather"))),
         ("nbits4-matmul", lambda src, dst: nbits_quantize(src, dst, bits=4, ops=("MatMul",))),
@@ -220,8 +221,8 @@ def main():
             continue
         size = os.path.getsize(path)
         print(f"text {name}: min cos={c:.5f} size={size / 1e6:.1f} MB")
-        if c >= 0.995:
-            text_candidates.append((size, name, path))
+        if c >= 0.985:
+            text_candidates.append((size, name, path, c))
     if not text_candidates:
         try:
             from onnxruntime.transformers.float16 import convert_float_to_float16
@@ -229,14 +230,20 @@ def main():
             onnx.save(convert_float_to_float16(onnx.load(text_fp32), keep_io_types=True), path)
             c = text_cos(path, text_level)
             print(f"text fp16: min cos={c:.5f} size={os.path.getsize(path) / 1e6:.1f} MB")
-            if c >= 0.995:
-                text_candidates.append((os.path.getsize(path), "fp16", path))
+            if c >= 0.985:
+                text_candidates.append((os.path.getsize(path), "fp16", path, c))
         except Exception as e:  # noqa: BLE001
             print(f"text fp16: failed: {e}"[:300])
     if not text_candidates:
-        text_candidates.append((os.path.getsize(text_fp32), "fp32", text_fp32))
+        text_candidates.append((os.path.getsize(text_fp32), "fp32", text_fp32, 1.0))
+    # Smallest variant that is near-exact and reasonably small; otherwise accept a little drift
+    # (>= 0.985 cosine barely changes retrieval order) to save ~100 MB; otherwise the smallest exact one.
     text_candidates.sort()
-    _, text_name, text_path = text_candidates[0]
+    pick = next((c for c in text_candidates if c[3] >= 0.995 and c[0] <= 100e6), None) \
+        or next((c for c in text_candidates if c[3] >= 0.985 and c[0] <= 100e6), None) \
+        or next((c for c in text_candidates if c[3] >= 0.995), None) \
+        or text_candidates[0]
+    _, text_name, text_path, _ = pick
     print("chosen text variant:", text_name)
     text_out = os.path.join(clip_dir, "text_encoder.onnx")
     shutil.copy(text_path, text_out)
@@ -289,6 +296,13 @@ def nbits_quantize(src, dst, bits, ops):
     quantizer = mnq.MatMulNBitsQuantizer(onnx.load(src), **kwargs)
     quantizer.process()
     quantizer.model.save_model_to_file(dst, use_external_data_format=False)
+
+
+def nbits_mixed(src, dst, work):
+    """8-bit weight-only MatMuls (accuracy) + 4-bit token-embedding Gather (size)."""
+    tmp = os.path.join(work, "text-nbits8-tmp.onnx")
+    nbits_quantize(src, tmp, bits=8, ops=("MatMul",))
+    nbits_quantize(tmp, dst, bits=4, ops=("Gather",))
 
 
 LEVELS = ["all", "extended", "basic", "none"]

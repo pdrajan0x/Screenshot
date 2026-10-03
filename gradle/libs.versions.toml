@@ -19,6 +19,9 @@ telephoto = "0.19.0"
 onnxruntime = "1.30.0"
 mlkitTextLatin = "19.0.1"
 mlkitTextDevanagari = "16.0.1"
+mlkitFace = "17.1.0"
+media3 = "1.11.0"
+biometric = "1.1.0"
 junit = "4.13.2"
 orgJson = "20260814"
 
@@ -52,6 +55,12 @@ onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime
 onnxruntime-jvm = { group = "com.microsoft.onnxruntime", name = "onnxruntime", version.ref = "onnxruntime" }
 mlkit-text-latin = { group = "com.google.android.gms", name = "play-services-mlkit-text-recognition", version.ref = "mlkitTextLatin" }
 mlkit-text-devanagari = { group = "com.google.android.gms", name = "play-services-mlkit-text-recognition-devanagari", version.ref = "mlkitTextDevanagari" }
+mlkit-face = { group = "com.google.android.gms", name = "play-services-mlkit-face-detection", version.ref = "mlkitFace" }
+media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
+media3-transformer = { group = "androidx.media3", name = "media3-transformer", version.ref = "media3" }
+media3-effect = { group = "androidx.media3", name = "media3-effect", version.ref = "media3" }
+androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }

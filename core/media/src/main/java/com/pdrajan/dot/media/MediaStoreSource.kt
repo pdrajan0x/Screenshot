@@ -37,6 +37,9 @@ data class MediaItem(
     val relativePath: String?,
     val isFavorite: Boolean = false,
     val isTrashed: Boolean = false,
+    /** When MediaStore will purge a trashed item (Android 11+). */
+    val expiresAt: Long? = null,
+    val addedAt: Long = 0L,
 )
 
 /** Reads photos, videos and screenshots from MediaStore. */
@@ -56,11 +59,19 @@ class MediaStoreSource(private val context: Context) {
         query(imagesUri(), MediaType.IMAGE, selection, args)
     }
 
-    /** Images and videos for the gallery. [includeTrashed] needs Android 11+. */
-    suspend fun allMedia(includeTrashed: Boolean = false): List<MediaItem> = withContext(Dispatchers.IO) {
-        val images = query(imagesUri(), MediaType.IMAGE, null, null, includeTrashed)
-        val videos = query(videosUri(), MediaType.VIDEO, null, null, includeTrashed)
+    /** Images and videos for the gallery, newest first. */
+    suspend fun allMedia(): List<MediaItem> = withContext(Dispatchers.IO) {
+        val images = query(imagesUri(), MediaType.IMAGE, null, null)
+        val videos = query(videosUri(), MediaType.VIDEO, null, null)
         (images + videos).sortedByDescending { it.takenAt }
+    }
+
+    /** Items in the system bin (Android 11+; empty before). */
+    suspend fun trashed(): List<MediaItem> = withContext(Dispatchers.IO) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return@withContext emptyList()
+        val images = query(imagesUri(), MediaType.IMAGE, null, null, onlyTrashed = true)
+        val videos = query(videosUri(), MediaType.VIDEO, null, null, onlyTrashed = true)
+        (images + videos).sortedByDescending { it.modifiedAt }
     }
 
     suspend fun byIds(ids: Collection<Long>, type: MediaType = MediaType.IMAGE): List<MediaItem> = withContext(Dispatchers.IO) {
@@ -101,7 +112,7 @@ class MediaStoreSource(private val context: Context) {
         type: MediaType,
         selection: String?,
         args: Array<String>?,
-        includeTrashed: Boolean = false,
+        onlyTrashed: Boolean = false,
     ): List<MediaItem> {
         val projection = buildList {
             add(MediaStore.MediaColumns._ID)
@@ -124,6 +135,7 @@ class MediaStoreSource(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 add(MediaStore.MediaColumns.IS_FAVORITE)
                 add(MediaStore.MediaColumns.IS_TRASHED)
+                add(MediaStore.MediaColumns.DATE_EXPIRES)
             }
         }.toTypedArray()
 
@@ -135,7 +147,7 @@ class MediaStoreSource(private val context: Context) {
                 }
                 putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.MediaColumns.DATE_ADDED))
                 putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
-                if (includeTrashed) putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                if (onlyTrashed) putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_ONLY)
             }
             resolver.query(collection, projection, bundle, null)
         } else {
@@ -159,6 +171,7 @@ class MediaStoreSource(private val context: Context) {
             val durCol = c.getColumnIndex("duration")
             val favCol = c.getColumnIndex("is_favorite")
             val trashCol = c.getColumnIndex("is_trashed")
+            val expiresCol = c.getColumnIndex("date_expires")
             while (c.moveToNext()) {
                 val id = c.getLong(idCol)
                 val added = c.getLong(addedCol) * 1000
@@ -180,6 +193,8 @@ class MediaStoreSource(private val context: Context) {
                     relativePath = if (pathCol >= 0) c.getString(pathCol) else null,
                     isFavorite = favCol >= 0 && c.getInt(favCol) == 1,
                     isTrashed = trashCol >= 0 && c.getInt(trashCol) == 1,
+                    expiresAt = if (expiresCol >= 0 && !c.isNull(expiresCol)) c.getLong(expiresCol) * 1000 else null,
+                    addedAt = added,
                 )
             }
         }
