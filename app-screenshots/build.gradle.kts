@@ -52,6 +52,14 @@ android {
         noCompress.add("onnx")
     }
 
+    packaging {
+        jniLibs {
+            // llama.cpp picks its CPU backend (armv8.0 … armv9.2) by scanning nativeLibraryDir at
+            // runtime, so native libraries must be extracted on install.
+            useLegacyPackaging = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -74,6 +82,7 @@ dependencies {
     implementation(project(":core:media"))
     implementation(project(":core:ml"))
     implementation(project(":core:engine"))
+    implementation(project(":core:llm"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

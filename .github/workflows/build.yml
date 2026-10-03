@@ -136,6 +136,15 @@ jobs:
             echo "DOT_SIGNING_PASSWORD=$pass"
           } >> "$GITHUB_ENV"
 
+      - name: Cache llama.cpp
+        uses: actions/cache@v4
+        with:
+          path: third_party/llama.cpp
+          key: llama-cpp-${{ hashFiles('tools/fetch_llama.sh') }}
+
+      - name: Fetch llama.cpp
+        run: tools/fetch_llama.sh
+
       - name: Test engine and model parity
         run: ./gradlew :core:engine:test --stacktrace
 
