@@ -24,7 +24,9 @@ jobs:
           fetch() {
             local repo="$1"; shift
             local files
-            files=$(curl -fsSL "https://huggingface.co/api/models/$repo" | python3 -c "import sys,json; print('\n'.join(s['rfilename'] for s in json.load(sys.stdin)['siblings']))")
+            if ! files=$(curl -fsSL "https://huggingface.co/api/models/$repo" | python3 -c "import sys,json; print('\n'.join(s['rfilename'] for s in json.load(sys.stdin)['siblings']))"); then
+              echo "== $repo not found, skipped"; return 0
+            fi
             echo "== $repo"; echo "$files"
             for pattern in "$@"; do
               local name
@@ -35,12 +37,16 @@ jobs:
                 return 0
               fi
             done
-            echo "no file matched in $repo: $*"; return 1
+            echo "no file matched in $repo: $*"
           }
-          fetch ggml-org/SmolVLM-500M-Instruct-GGUF '^SmolVLM-500M-Instruct-Q8_0\.gguf$'
-          fetch ggml-org/SmolVLM-500M-Instruct-GGUF '^mmproj-SmolVLM-500M-Instruct-Q8_0\.gguf$' '^mmproj.*f16\.gguf$'
-          fetch LiquidAI/LFM2.5-VL-450M-GGUF '^LFM2\.5-VL-450M-Q4_0\.gguf$' 'Q4_0\.gguf$' 'Q8_0\.gguf$'
-          fetch LiquidAI/LFM2.5-VL-450M-GGUF '^mmproj.*Q8_0\.gguf$' '^mmproj.*F16\.gguf$' '^mmproj.*\.gguf$'
+          # In use: LFM2.5-VL 450M (keep the file names: the apps download them from this release).
+          fetch LiquidAI/LFM2.5-VL-450M-GGUF '^LFM2\.5-VL-450M-Q4_0\.gguf$' 'Q4_0\.gguf$'
+          fetch LiquidAI/LFM2.5-VL-450M-GGUF '^mmproj.*Q8_0\.gguf$' '^mmproj.*F16\.gguf$'
+          # Candidates for better descriptions and keywords.
+          fetch LiquidAI/LFM2.5-VL-1.6B-GGUF '^LFM2\.5-VL-1\.6B-Q4_0\.gguf$' 'Q4_0\.gguf$' 'Q4_K_M\.gguf$'
+          fetch LiquidAI/LFM2.5-VL-1.6B-GGUF '^mmproj.*Q8_0\.gguf$' '^mmproj.*F16\.gguf$' '^mmproj.*\.gguf$'
+          fetch ggml-org/Qwen3-VL-2B-Instruct-GGUF 'Q4_0\.gguf$' 'Q4_K_M\.gguf$' 'Q8_0\.gguf$'
+          fetch ggml-org/Qwen3-VL-2B-Instruct-GGUF '^mmproj.*Q8_0\.gguf$' '^mmproj.*f16\.gguf$' '^mmproj.*\.gguf$'
           ls -l
           sha256sum *.gguf | tee SHA256SUMS.txt
           stat -c '%n %s' *.gguf | tee SIZES.txt
