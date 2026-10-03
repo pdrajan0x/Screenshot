@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Process
+import com.pdrajan.dot.engine.AppPrompts
 import com.pdrajan.dot.engine.SourceApp
 
 /**
@@ -20,13 +21,18 @@ class ForegroundAppResolver(private val context: Context) {
     data class ForegroundApp(val packageName: String, val label: String)
 
     private val usage = context.getSystemService(UsageStatsManager::class.java)
-    private val launchers: Set<String> by lazy {
+
+    /** Home screen apps. Settings' "FallbackHome" (shown while the phone boots) doesn't count. */
+    val launchers: Set<String> by lazy {
         runCatching {
             val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-            context.packageManager.queryIntentActivities(home, PackageManager.MATCH_ALL).map { it.activityInfo.packageName }.toSet()
+            context.packageManager.queryIntentActivities(home, PackageManager.MATCH_ALL)
+                .filterNot { it.activityInfo.name.endsWith("FallbackHome") || it.activityInfo.packageName == "com.android.settings" }
+                .map { it.activityInfo.packageName }.toSet()
         }.getOrDefault(emptySet())
     }
     private val labels = HashMap<String, String>()
+    private val monthlyUsage = HashMap<Long, Map<String, Double>?>()
 
     fun hasAccess(): Boolean {
         val ops = context.getSystemService(AppOpsManager::class.java) ?: return false
@@ -39,23 +45,67 @@ class ForegroundAppResolver(private val context: Context) {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    /** The app in front at [timeMillis], or null when unknown or the home screen was showing. */
+    /** The app in front at [timeMillis] ("Home screen" for the launcher), or null when unknown. */
     fun appAt(timeMillis: Long): ForegroundApp? {
         if (timeMillis <= 0 || usage == null || !hasAccess()) return null
-        val events = runCatching { usage.queryEvents(timeMillis - WINDOW_BEFORE, timeMillis + SLACK_AFTER) }.getOrNull() ?: return null
+        return timeline(timeMillis - WINDOW_BEFORE, timeMillis + SLACK_AFTER)?.appAt(timeMillis)
+    }
+
+    /** Which app was in front over a period, read from the system in one pass. */
+    inner class Timeline internal constructor(private val times: LongArray, private val packages: Array<String>) {
+        val isEmpty: Boolean get() = times.isEmpty()
+
+        fun appAt(timeMillis: Long): ForegroundApp? {
+            // The last app to come to the front up to the moment of the screenshot.
+            var lo = 0
+            var hi = times.size
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                if (times[mid] <= timeMillis + SLACK_AFTER) lo = mid + 1 else hi = mid
+            }
+            val i = lo - 1
+            if (i < 0 || times[i] < timeMillis - WINDOW_BEFORE) return null
+            return app(packages[i])
+        }
+    }
+
+    fun timeline(fromMillis: Long, toMillis: Long): Timeline? {
+        if (usage == null || !hasAccess()) return null
+        val events = runCatching { usage.queryEvents(fromMillis, toMillis) }.getOrNull() ?: return null
         val event = UsageEvents.Event()
-        var current: String? = null
+        val times = ArrayList<Long>()
+        val packages = ArrayList<String>()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            if (event.timeStamp > timeMillis + SLACK_AFTER) break
             if (event.eventType != UsageEvents.Event.ACTIVITY_RESUMED) continue
             val pkg = event.packageName ?: continue
             if (isOverlay(pkg)) continue
-            current = pkg
+            times += event.timeStamp
+            packages += pkg
         }
-        val pkg = current ?: return null
-        if (pkg in launchers) return null
-        return ForegroundApp(pkg, label(pkg))
+        return Timeline(times.toLongArray(), packages.toTypedArray())
+    }
+
+    private fun app(pkg: String) = ForegroundApp(pkg, if (pkg in launchers) HOME_SCREEN else label(pkg))
+
+    /**
+     * Minutes each app was in front during the month around [timeMillis], from Android's usage
+     * totals (kept far longer than individual events, in coarser buckets). Null when unknown.
+     */
+    fun usageMinutes(timeMillis: Long): Map<String, Double>? {
+        if (usage == null || timeMillis <= 0) return null
+        val month = timeMillis / MONTH
+        // Months without data are remembered too (as null), so they're asked about once.
+        synchronized(monthlyUsage) { if (monthlyUsage.containsKey(month)) return monthlyUsage[month] }
+        if (!hasAccess()) return null
+        val minutes = runCatching {
+            usage.queryAndAggregateUsageStats(month * MONTH, (month + 1) * MONTH)
+                .mapValues { it.value.totalTimeInForeground / 60_000.0 }
+                .filterValues { it > 0.0 }
+                .takeIf { it.isNotEmpty() }
+        }.getOrNull()
+        synchronized(monthlyUsage) { monthlyUsage[month] = minutes }
+        return minutes
     }
 
     /** System screens that pop up around a screenshot without being what was captured. */
@@ -63,7 +113,9 @@ class ForegroundAppResolver(private val context: Context) {
         pkg == context.packageName || pkg == "android" || pkg.contains("systemui") || pkg.contains("screenshot") ||
             pkg.contains("screencapture") || pkg == "com.google.android.as" || pkg.endsWith(".permissioncontroller")
 
-    private fun label(pkg: String): String = labels.getOrPut(pkg) {
+    fun label(pkg: String): String = synchronized(labels) { labels.getOrPut(pkg) { loadLabel(pkg) } }
+
+    private fun loadLabel(pkg: String): String = run {
         runCatching {
             val pm = context.packageManager
             val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -80,6 +132,10 @@ class ForegroundAppResolver(private val context: Context) {
         private const val WINDOW_BEFORE = 3 * 60 * 60_000L
         // MediaStore times can be rounded to the second and written just after the capture.
         private const val SLACK_AFTER = 1_500L
+        private const val MONTH = 30L * 24 * 60 * 60_000
+
+        /** What screenshots of the launcher are filed under. */
+        const val HOME_SCREEN = AppPrompts.HOME_SCREEN
 
         /** How far back usage events are reliably available. */
         const val HISTORY_MILLIS = 7L * 24 * 60 * 60_000

@@ -61,6 +61,36 @@ object PromptBank {
         return computed
     }
 
+    /**
+     * Like [embed] for a list that changes over time (one prompt per installed app): every prompt
+     * is cached on its own, so only new ones go through the text encoder.
+     */
+    fun embedEach(context: Context, clip: ClipModel, name: String, prompts: Collection<String>): Map<String, FloatArray> {
+        val dim = clip.config.embedDim
+        val key = clip.config.modelName.hashCode().toUInt().toString(16)
+        val dir = File(context.noBackupFilesDir, "clip")
+        val file = File(dir, "$name-each-$key.bin")
+        val cache = LinkedHashMap<String, FloatArray>()
+        runCatching {
+            if (file.exists()) DataInputStream(file.inputStream().buffered()).use { input ->
+                if (input.readInt() == dim) repeat(input.readInt()) { cache[input.readUTF()] = FloatArray(dim) { input.readFloat() } }
+            }
+        }.onFailure { cache.clear() }
+        val missing = prompts.filter { it !in cache }.distinct()
+        if (missing.isNotEmpty()) {
+            missing.chunked(8).forEach { chunk -> chunk.zip(clip.embedTexts(chunk)).forEach { (p, v) -> cache[p] = v } }
+            dir.mkdirs()
+            val tmp = File(dir, file.name + ".tmp")
+            DataOutputStream(tmp.outputStream().buffered()).use { out ->
+                out.writeInt(dim)
+                out.writeInt(cache.size)
+                cache.forEach { (p, v) -> out.writeUTF(p); v.forEach { out.writeFloat(it) } }
+            }
+            tmp.renameTo(file)
+        }
+        return prompts.associateWith { cache.getValue(it) }
+    }
+
     private fun read(file: File, count: Int, dim: Int): List<FloatArray>? = runCatching {
         if (!file.exists()) return null
         DataInputStream(file.inputStream().buffered()).use { input ->

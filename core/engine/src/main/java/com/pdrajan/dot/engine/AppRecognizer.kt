@@ -69,6 +69,9 @@ object AppRecognizer {
         "ChatGPT" to clues("chatgpt" to 3f),
     )
 
+    /** Every app with text clues. */
+    val TEXT_APPS: Set<String> get() = TEXT.keys
+
     data class Guess(val app: String, val score: Float)
 
     /**
@@ -76,12 +79,7 @@ object AppRecognizer {
      * @param modelGuess the summary model's "App:" answer, a weak extra hint.
      */
     fun recognize(text: String, visual: Map<String, Float>?, modelGuess: String? = null): Guess? {
-        val lower = text.lowercase()
-        val scores = HashMap<String, Float>()
-        TEXT.forEach { (app, list) ->
-            val s = list.sumOf { c -> if (CategoryClassifier.containsKeyword(lower, c.phrase)) c.weight.toDouble() else 0.0 }.toFloat()
-            if (s > 0f) scores[app] = s / 3f
-        }
+        val scores = HashMap(textScores(text.lowercase()))
         visual?.forEach { (label, p) -> if (!label.startsWith("~")) scores.merge(label, p * 1.5f, Float::plus) }
         modelGuess?.let { g -> canonical(g)?.let { scores.merge(it, 0.4f, Float::plus) } }
         val best = scores.maxByOrNull { it.value } ?: return null
@@ -89,10 +87,23 @@ object AppRecognizer {
         return if (best.value >= 1f && best.value - second >= 0.25f) Guess(best.key, best.value) else null
     }
 
+    /** Text evidence per known app; 1 means a decisive clue. [lower] must be lowercase. */
+    fun textScores(lower: String): Map<String, Float> {
+        val scores = HashMap<String, Float>()
+        TEXT.forEach { (app, list) ->
+            val s = list.sumOf { c -> if (CategoryClassifier.containsKeyword(lower, c.phrase)) c.weight.toDouble() else 0.0 }.toFloat()
+            if (s > 0f) scores[app] = s / 3f
+        }
+        return scores
+    }
+
     /** Maps a free-form app name ("whatsapp messenger", "Google Pay (GPay)") onto a known one. */
     fun canonical(name: String): String? {
-        val n = name.lowercase()
-        return (TEXT.keys + VISUAL.keys.filterNot { it.startsWith("~") }).firstOrNull { n.contains(it.lowercase()) }
+        val n = name.lowercase().trim()
+        val keys = TEXT.keys + VISUAL.keys.filterNot { it.startsWith("~") }
+        keys.firstOrNull { it.lowercase() == n }?.let { return it }
+        // Whole words only: "Netflix" is not "X", "Motorola" is not "Ola".
+        return keys.filter { CategoryClassifier.containsKeyword(n, it.lowercase()) }.maxByOrNull { it.length }
     }
 
     private val BROWSERS = setOf(

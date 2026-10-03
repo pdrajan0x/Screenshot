@@ -21,11 +21,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -38,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -47,6 +50,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Wallpaper
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -91,6 +95,7 @@ import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.IndexState
 import com.pdrajan.dotscreenshots.data.Shot
 import com.pdrajan.dotscreenshots.data.ShotDetail
+import com.pdrajan.dotscreenshots.index.AppIdentification
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -153,6 +158,11 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
     fun removeFrom(collectionId: Long) = viewModelScope.launch { c.repo.removeFromCollection(collectionId, listOf(current.value)) }
 
     fun forget(id: Long) = viewModelScope.launch { c.repo.forget(listOf(id)) }
+
+    suspend fun appChoices(): List<AppIdentification.AppChoice> = c.engine.apps.choices()
+
+    /** The user says which app it's from; similar screenshots are re-guessed with that in mind. */
+    fun setApp(id: Long, choice: AppIdentification.AppChoice) = c.setApp(id, choice.label, choice.packageName)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -320,6 +330,7 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
     val similar by vm.similar.collectAsStateWithLifecycle()
     var note by remember(d.shot.id) { mutableStateOf(d.note) }
     var picker by remember { mutableStateOf(false) }
+    var appPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(note) {
         if (note == d.note) return@LaunchedEffect
@@ -327,15 +338,25 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
         vm.saveNote(d.shot.id, note)
     }
 
+    if (appPicker) {
+        AppPickerDialog(
+            current = d.shot.app.takeIf { !d.appGuessed },
+            loadChoices = vm::appChoices,
+            onPick = { vm.setApp(d.shot.id, it); appPicker = false },
+            onDismiss = { appPicker = false },
+        )
+    }
+
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
         Column(Modifier.padding(horizontal = 20.dp)) {
             val title = d.shot.title
             Text(title ?: d.shot.app ?: "Screenshot", style = MaterialTheme.typography.headlineSmall)
             Text(
-                listOfNotNull(d.shot.app.takeIf { title != null }, DateLabels.dateTime(d.shot.takenAt)).joinToString(" · "),
+                DateLabels.dateTime(d.shot.takenAt),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            AppLine(d, onClick = { appPicker = true })
             d.summary?.let { summary ->
                 Spacer(Modifier.height(10.dp))
                 Text(summary, style = MaterialTheme.typography.bodyMedium)
@@ -452,4 +473,90 @@ private fun formatBytes(bytes: Long): String = when {
     bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
     bytes >= 1_000 -> "${bytes / 1_000} KB"
     else -> "$bytes B"
+}
+
+/** Which app the screenshot is from, and how sure that is; tap to correct it. */
+@Composable
+private fun AppLine(d: ShotDetail, onClick: () -> Unit) {
+    val app = d.shot.app
+    // Recognised from clear clues (older versions) without a stored confidence: fairly sure.
+    val confidence = d.appConfidence ?: if (d.appSource == "visual" || d.appSource == "model") 0.7f else 0f
+    val text = if (app == null) {
+        "Which app is this from?"
+    } else when {
+        !d.appGuessed -> app
+        confidence >= 0.6f -> "Probably $app"
+        else -> "Maybe $app"
+    }
+    Row(
+        Modifier.clip(MaterialTheme.shapes.small).clickable(onClick = onClick).padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Apps, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(6.dp))
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(8.dp))
+        Text(if (app == null || d.appGuessed) "Set app" else "Change", style = MaterialTheme.typography.labelMedium, color = DotTheme.extra.accent)
+    }
+}
+
+@Composable
+private fun AppPickerDialog(
+    current: String?,
+    loadChoices: suspend () -> List<AppIdentification.AppChoice>,
+    onPick: (AppIdentification.AppChoice) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var choices by remember { mutableStateOf<List<AppIdentification.AppChoice>?>(null) }
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { choices = loadChoices() }
+    val q = query.trim()
+    val shown = choices.orEmpty().filter { q.isEmpty() || it.label.contains(q, ignoreCase = true) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Which app is this from?") },
+        text = {
+            Column {
+                Text(
+                    "Similar screenshots will be matched to it too.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search apps") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = DotTheme.extra.accent, cursorColor = DotTheme.extra.accent),
+                )
+                Spacer(Modifier.height(4.dp))
+                if (choices == null) {
+                    Text("Loading apps…", modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    if (q.isNotEmpty() && shown.none { it.label.equals(q, ignoreCase = true) }) {
+                        item {
+                            Text(
+                                "Use “$q”",
+                                color = DotTheme.extra.accent,
+                                modifier = Modifier.fillMaxWidth().clickable { onPick(AppIdentification.AppChoice(q, null)) }.padding(vertical = 12.dp),
+                            )
+                        }
+                    }
+                    items(shown, key = { it.label }) { choice ->
+                        Text(
+                            choice.label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (choice.label == current) DotTheme.extra.accent else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.fillMaxWidth().clickable { onPick(choice) }.padding(vertical = 12.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

@@ -40,9 +40,14 @@ data class ShotDetail(
     val tags: List<String> = emptyList(),
     /** For browser screenshots: the page that was open. */
     val pageUrl: String? = null,
-    /** How the source app was found: usage, file, visual or model. */
+    /** How the source app was found: usage, file, user, visual, model or guess. */
     val appSource: String? = null,
-)
+    /** For guessed apps: how sure the guess is (0–1). */
+    val appConfidence: Float? = null,
+) {
+    /** The app is a guess rather than known for sure. */
+    val appGuessed: Boolean get() = appSource == null || appSource == "guess" || appSource == "model" || appSource == "visual"
+}
 
 /** Progress of the summary model over the library. */
 data class SummaryCounts(val done: Int, val waiting: Int)

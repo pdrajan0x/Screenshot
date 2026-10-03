@@ -22,7 +22,11 @@ enum class AppSource(val code: String) {
     /** Recognised from how the screen looks and its text. */
     VISUAL("visual"),
     /** The summary model named it (with supporting text clues). */
-    MODEL("model");
+    MODEL("model"),
+    /** Best guess from everything known (see AppIdentifier), with a confidence. */
+    GUESS("guess"),
+    /** Picked by the user. */
+    USER("user");
 
     companion object {
         fun of(code: String?) = entries.firstOrNull { it.code == code }

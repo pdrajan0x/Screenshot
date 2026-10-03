@@ -43,7 +43,8 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
                 title TEXT,
                 summary TEXT,
                 tags TEXT,
-                summary_state INTEGER NOT NULL DEFAULT 0
+                summary_state INTEGER NOT NULL DEFAULT 0,
+                app_confidence REAL
             )
             """.trimIndent(),
         )
@@ -72,6 +73,8 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
             createFts(db)
             db.execSQL("INSERT INTO shots_fts(docid, $FTS_COLUMNS) SELECT id, $FTS_SOURCE FROM shots")
         }
+        // How sure a guessed source app is (null when it is certain).
+        if (oldVersion < 4) db.execSQL("ALTER TABLE shots ADD COLUMN app_confidence REAL")
     }
 
     private fun createFts(db: SQLiteDatabase) {
@@ -80,7 +83,7 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
 
     companion object {
         const val NAME = "shots.db"
-        const val VERSION = 3
+        const val VERSION = 4
 
         /** Full-text columns, and the shots expressions that fill them (same order). */
         const val FTS_COLUMNS = "ocr_text, note, app, title, summary, tags"

@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +18,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -42,6 +45,7 @@ import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.SettingsRow
 import com.pdrajan.dot.design.SettingsSwitchRow
 import com.pdrajan.dot.llm.ModelDownloader
+import com.pdrajan.dot.llm.ModelSource
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.SummaryCounts
 
@@ -74,9 +78,11 @@ fun SmartSearchSettings(c: AppContainer) {
     SettingsRow(
         title = "Know which app each screenshot is from",
         subtitle = if (usage) {
-            "On · exact for new screenshots and the last week, from Android's usage history. Stays on this phone."
+            "On · exact for new screenshots and as far back as Android's usage history goes (about a week); " +
+                "older ones get a best guess. Stays on this phone."
         } else {
-            "Off · tap and switch on Usage access for Dot Screenshots. Without it, apps are guessed from how the screen looks."
+            "Off · every screenshot still gets a best guess from how it looks. Switch on Usage access for Dot Screenshots " +
+                "to know new ones for sure."
         },
         icon = Icons.Rounded.Apps,
         onClick = { openUsageAccessSettings(ctx) },
@@ -90,6 +96,15 @@ private fun SummaryModelPanel(c: AppContainer) {
     val enabled by c.settings.summariesEnabled.collectAsStateWithLifecycle()
     val counts by remember { c.repo.observeSummaryCounts() }.collectAsStateWithLifecycle(SummaryCounts(0, 0))
     val spec = c.modelDownload.spec
+    val shared = c.modelDownload.sharedDir != null
+    // A copy already on the phone: one another app downloaded, or this app's own after a reinstall.
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(c::useModelFile) }
+    val pickButton = @Composable {
+        TextButton(onClick = { pickFile.launch(arrayOf("*/*")) }) {
+            Icon(Icons.Rounded.FolderOpen, null, modifier = Modifier.padding(end = 8.dp))
+            Text("Use a file I already have")
+        }
+    }
     val m = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
     when (val s = state) {
         ModelDownloader.State.Ready -> {
@@ -100,8 +115,17 @@ private fun SummaryModelPanel(c: AppContainer) {
                 checked = enabled,
                 onCheckedChange = { c.settings.setSummariesEnabled(it); if (it) c.onForeground() },
             )
+            val picked = c.modelDownload.source() is ModelSource.Picked
+            c.modelDownload.describeLocation()?.let { where ->
+                Text(
+                    if (picked || where == "app storage") "Model: $where" else "Model saved in $where · other apps can open it from there",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
+            }
             TextButton(onClick = { c.deleteModel() }, modifier = Modifier.padding(start = 8.dp)) {
-                Text("Delete model (${mb(spec.sizeBytes)})")
+                Text(if (picked) "Stop using this file" else "Delete model (${mb(spec.sizeBytes)})")
             }
         }
         is ModelDownloader.State.Downloading -> Column(m) {
@@ -120,7 +144,8 @@ private fun SummaryModelPanel(c: AppContainer) {
             }
         }
         ModelDownloader.State.Verifying -> Column(m) {
-            Text("Checking the download…", style = MaterialTheme.typography.titleMedium)
+            Text("Checking the model file…", style = MaterialTheme.typography.titleMedium)
+            Text("Takes a few seconds", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         is ModelDownloader.State.Failed -> Column(m) {
             Text("AI summaries", style = MaterialTheme.typography.titleMedium)
@@ -130,18 +155,21 @@ private fun SummaryModelPanel(c: AppContainer) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(8.dp))
-            DotOutlinedButton(if (s.bytes > 0) "Resume download" else "Try again", onClick = { c.downloadModel() }, icon = Icons.Rounded.Download)
+            DotOutlinedButton(if (s.bytes > 0) "Resume download" else "Download model", onClick = { c.downloadModel() }, icon = Icons.Rounded.Download)
+            pickButton()
         }
         ModelDownloader.State.Missing -> Column(m) {
             Text("AI summaries", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Titles, summaries and smarter search, written on this phone by ${spec.label}. " +
-                    "One-time download of ${mb(spec.sizeBytes)} (Wi-Fi recommended). Nothing is uploaded.",
+                    "One-time download of ${mb(spec.sizeBytes)} (Wi-Fi recommended). Nothing is uploaded." +
+                    if (shared) " Saved in Download/${ModelDownloader.SHARED_FOLDER} so other apps can use it too." else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(10.dp))
             DotPrimaryButton("Download model", onClick = { c.downloadModel() }, icon = Icons.Rounded.Download, accent = true)
+            pickButton()
         }
     }
 }

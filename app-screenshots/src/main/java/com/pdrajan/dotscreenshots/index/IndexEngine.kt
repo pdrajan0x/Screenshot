@@ -48,7 +48,7 @@ class IndexEngine(
         val started = System.currentTimeMillis()
         val shots = media.screenshots()
         val result = repo.sync(shots)
-        backfillApps()
+        apps.run()
         val counts = repo.counts()
         DotLog.i(
             "sync: ${shots.size} screenshots on device, ${result.added} new, ${result.removed} removed · " +
@@ -60,21 +60,8 @@ class IndexEngine(
     /** Which app each screenshot came from, from the system's usage history (needs Usage access). */
     val foreground = ForegroundAppResolver(context)
 
-    /**
-     * Once Usage access is on, screenshots from the last week get their exact source app (even if
-     * they were indexed before), replacing guesses.
-     */
-    private suspend fun backfillApps() {
-        if (!foreground.hasAccess()) return
-        val candidates = repo.appBackfillCandidates(System.currentTimeMillis() - ForegroundAppResolver.HISTORY_MILLIS)
-        var found = 0
-        for ((id, takenAt) in candidates) {
-            val app = withContext(Dispatchers.IO) { foreground.appAt(takenAt) } ?: continue
-            repo.setExactApp(id, app.label, app.packageName)
-            found++
-        }
-        if (found > 0) DotLog.i("apps: $found screenshots matched to their app from usage history")
-    }
+    /** A source app for every screenshot: exact from usage history, or the best guess. */
+    val apps = AppIdentification(context, repo, hub, foreground)
 
     /**
      * Analyses up to [limit] pending screenshots, newest first. Stops early at [deadline]
@@ -159,6 +146,8 @@ class IndexEngine(
                 reader?.close()
                 _progress.value = IndexProgress()
             }
+            // New screenshots without an exact app get their best guess.
+            if (done - failed > 0) apps.run()
             // Successes only, so callers looping "while > 0" stop when a whole batch fails.
             done - failed
         }

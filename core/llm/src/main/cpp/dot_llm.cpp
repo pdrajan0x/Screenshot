@@ -6,8 +6,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <string>
 #include <vector>
+
+#include <unistd.h>
 
 #include "ggml-backend.h"
 #include "llama.h"
@@ -18,7 +21,6 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #else
-#include <cstdio>
 #define LOGI(...) (fprintf(stderr, __VA_ARGS__), fputc('\n', stderr))
 #define LOGE(...) (fprintf(stderr, __VA_ARGS__), fputc('\n', stderr))
 #endif
@@ -26,6 +28,8 @@
 namespace {
 
 struct Engine {
+    // Set when the model was opened from a file descriptor (a file picked from shared storage).
+    FILE *file = nullptr;
     llama_model *model = nullptr;
     llama_context *ctx = nullptr;
     const llama_vocab *vocab = nullptr;
@@ -95,14 +99,31 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeSystemInfo(JNIEnv *env, jclass) {
     return env->NewStringUTF(llama_print_system_info());
 }
 
+// Loads from [jpath], or from [fd] when it is >= 0. A file another app made in shared storage can
+// only be read through the descriptor the system file picker hands out: reopening it by path
+// (even /proc/self/fd/N) is refused, so llama.cpp reads from a duplicate of that descriptor.
 JNIEXPORT jlong JNICALL
-Java_com_pdrajan_dot_llm_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpath, jint n_ctx, jint n_threads) {
-    const char *path = env->GetStringUTFChars(jpath, nullptr);
+Java_com_pdrajan_dot_llm_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpath, jint fd, jint n_ctx, jint n_threads) {
     llama_model_params mparams = llama_model_default_params();
-    llama_model *model = llama_model_load_from_file(path, mparams);
-    env->ReleaseStringUTFChars(jpath, path);
+    llama_model *model = nullptr;
+    FILE *file = nullptr;
+    if (fd >= 0) {
+        const int own = dup(fd);
+        file = own >= 0 ? fdopen(own, "rb") : nullptr;
+        if (file == nullptr) {
+            if (own >= 0) close(own);
+            LOGE("could not open the model file descriptor");
+            return 0;
+        }
+        model = llama_model_load_from_file_ptr(file, mparams);
+    } else {
+        const char *path = env->GetStringUTFChars(jpath, nullptr);
+        model = llama_model_load_from_file(path, mparams);
+        env->ReleaseStringUTFChars(jpath, path);
+    }
     if (model == nullptr) {
         LOGE("model load failed");
+        if (file != nullptr) fclose(file);
         return 0;
     }
     llama_context_params cparams = llama_context_default_params();
@@ -116,9 +137,11 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpa
     if (ctx == nullptr) {
         LOGE("context init failed");
         llama_model_free(model);
+        if (file != nullptr) fclose(file);
         return 0;
     }
     auto *engine = new Engine();
+    engine->file = file;
     engine->model = model;
     engine->ctx = ctx;
     engine->vocab = llama_model_get_vocab(model);
@@ -226,6 +249,7 @@ Java_com_pdrajan_dot_llm_LlamaNative_nativeFree(JNIEnv *, jclass, jlong handle) 
     if (engine == nullptr) return;
     llama_free(engine->ctx);
     llama_model_free(engine->model);
+    if (engine->file != nullptr) fclose(engine->file);
     delete engine;
 }
 

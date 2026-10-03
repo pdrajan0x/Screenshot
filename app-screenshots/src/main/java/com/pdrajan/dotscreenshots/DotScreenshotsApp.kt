@@ -2,6 +2,7 @@ package com.pdrajan.dotscreenshots
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -71,6 +72,11 @@ class AppContainer(val context: Context) {
     val modelDownload = ModelDownloader(context, Models.SUMMARY)
     val summaries = SummaryEngine(context, repo, settings, modelDownload, scope)
 
+    init {
+        // Earlier versions kept the model in app storage; it now lives in Download/AI Models.
+        scope.launch { modelDownload.migrateToShared() }
+    }
+
     /** Ids of the last search's results, so the viewer can swipe through them. */
     @Volatile var lastSearchIds: List<Long> = emptyList()
 
@@ -89,6 +95,7 @@ class AppContainer(val context: Context) {
     fun onForeground() {
         foregroundJob?.cancel()
         foregroundJob = scope.launch {
+            modelDownload.refresh()
             runCatching { engine.sync() }
             while (isActive && engine.process(limit = FOREGROUND_BATCH) > 0 && unrestricted()) Unit
             if (unrestricted()) {
@@ -141,6 +148,23 @@ class AppContainer(val context: Context) {
 
     fun pauseDownload() {
         downloadJob?.cancel()
+    }
+
+    /** The user set a screenshot's app; guesses for the rest are redone with it as an example. */
+    fun setApp(id: Long, label: String, packageName: String?) {
+        scope.launch {
+            repo.setAppByUser(id, label, packageName)
+            engine.apps.run(relearn = true)
+        }
+    }
+
+    /** Uses a copy of the model that is already on the phone (picked in the file picker). */
+    fun useModelFile(uri: Uri) {
+        if (downloadJob?.isActive == true) return
+        downloadJob = scope.launch {
+            modelDownload.adopt(uri)
+            if (modelDownload.isReady()) onForeground()
+        }
     }
 
     fun deleteModel() {

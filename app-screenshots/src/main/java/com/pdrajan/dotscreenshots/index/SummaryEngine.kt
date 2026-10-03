@@ -63,9 +63,13 @@ class SummaryEngine(
             val started = System.currentTimeMillis()
             _progress.value = IndexProgress(running = true, total = jobs.size, preparing = engine == null)
             try {
-                val llm = engine ?: withContext(Dispatchers.IO) { LlamaEngine.load(context, downloader.file) }?.also { engine = it }
+                val llm = engine ?: withContext(Dispatchers.IO) {
+                    downloader.source()?.let { LlamaEngine.load(context, it) }
+                }?.also { engine = it }
                 if (llm == null) {
                     DotLog.e("summary: model could not be loaded")
+                    // Deleted from the Files app, or the picked file went away: show the download again.
+                    downloader.refresh()
                     return 0
                 }
                 _progress.value = IndexProgress(running = true, total = jobs.size)

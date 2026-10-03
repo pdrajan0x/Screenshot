@@ -9,7 +9,8 @@ import java.io.File
 object LlamaNative {
     @JvmStatic external fun nativeInit(backendDir: String?)
     @JvmStatic external fun nativeSystemInfo(): String
-    @JvmStatic external fun nativeLoad(path: String, nCtx: Int, nThreads: Int): Long
+    /** Loads from [path], or from the open file descriptor [fd] when it is >= 0 (the path is then ignored). */
+    @JvmStatic external fun nativeLoad(path: String?, fd: Int, nCtx: Int, nThreads: Int): Long
     @JvmStatic external fun nativeCountTokens(handle: Long, text: ByteArray): Int
     @JvmStatic external fun nativeGenerate(
         handle: Long,
@@ -83,15 +84,31 @@ class LlamaEngine private constructor(handle: Long) : Closeable {
             initialised
         }
 
-        fun load(context: Context, model: File, contextTokens: Int = 2048, threads: Int = defaultThreads()): LlamaEngine? {
-            if (!init(context) || !model.exists()) return null
+        fun load(context: Context, model: File, contextTokens: Int = 2048, threads: Int = defaultThreads()): LlamaEngine? =
+            load(context, ModelSource.Local(model), contextTokens, threads)
+
+        fun load(context: Context, model: ModelSource, contextTokens: Int = 2048, threads: Int = defaultThreads()): LlamaEngine? {
+            if (!init(context)) return null
             val started = System.currentTimeMillis()
-            val h = LlamaNative.nativeLoad(model.absolutePath, contextTokens, threads)
+            val h = when (model) {
+                is ModelSource.Local -> {
+                    if (!model.file.exists()) return null
+                    LlamaNative.nativeLoad(model.file.absolutePath, -1, contextTokens, threads)
+                }
+                // The native side keeps its own duplicate of the descriptor.
+                is ModelSource.Picked -> runCatching {
+                    context.contentResolver.openFileDescriptor(model.uri, "r")?.use { LlamaNative.nativeLoad(null, it.fd, contextTokens, threads) }
+                }.onFailure { DotLog.e("llm: could not open the picked model file", it) }.getOrNull() ?: 0L
+            }
+            val name = when (model) {
+                is ModelSource.Local -> model.file.name
+                is ModelSource.Picked -> model.name
+            }
             if (h == 0L) {
-                DotLog.e("llm: failed to load ${model.name}")
+                DotLog.e("llm: failed to load $name")
                 return null
             }
-            DotLog.i("llm: loaded ${model.name} with $threads threads in ${System.currentTimeMillis() - started} ms")
+            DotLog.i("llm: loaded $name with $threads threads in ${System.currentTimeMillis() - started} ms")
             return LlamaEngine(h)
         }
 
