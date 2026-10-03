@@ -188,8 +188,9 @@ class EntityExtractor(
             "(?i)(?<![a-z])$MONTH_RX\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?!\\d)(?:,?\\s+(\\d{4})(?![\\d:]))?",
         )
         // "5:30", "5.30 pm", "17:30" (groups 1-3) or "5 pm" (groups 4-5). A bare "5" is not a time.
+        // Never start a set with "[:" — Android's ICU regex reads it as a POSIX class like [:alpha:].
         private val TIME = Regex(
-            "(?i)(?<![\\d.:])(\\d{1,2})[:.](\\d{2})(?!\\d)\\s?(am|pm|a\\.m\\.|p\\.m\\.)?|" +
+            "(?i)(?<![\\d.:])(\\d{1,2})[.:](\\d{2})(?!\\d)\\s?(am|pm|a\\.m\\.|p\\.m\\.)?|" +
                 "(?<![\\d.:])(\\d{1,2})\\s?(am|pm|a\\.m\\.|p\\.m\\.)",
         )
     }

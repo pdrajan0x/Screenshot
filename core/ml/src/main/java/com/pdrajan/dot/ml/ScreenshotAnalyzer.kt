@@ -8,6 +8,7 @@ import com.pdrajan.dot.engine.CategoryClassifier
 import com.pdrajan.dot.engine.Entity
 import com.pdrajan.dot.engine.EntityExtractor
 import com.pdrajan.dot.engine.SourceApp
+import com.pdrajan.dot.media.DotLog
 
 data class ScreenshotAnalysis(
     val ocrText: String,
@@ -29,6 +30,7 @@ class ScreenshotAnalyzer(
     private val classifier: CategoryClassifier,
     private val extractor: EntityExtractor = EntityExtractor(),
 ) {
+    private var loggedOcrError = false
 
     fun analyze(uri: Uri, displayName: String, runOcr: Boolean = true, maxCrops: Int = 3): ScreenshotAnalysis {
         val start = System.nanoTime()
@@ -44,8 +46,12 @@ class ScreenshotAnalyzer(
             } else try {
                 textReader.read(bitmap)
             } catch (e: Exception) {
-                if (!TextReader.isModelUnavailable(e)) throw e
-                ocrPending = true
+                // OCR trouble never costs the screenshot its visual index.
+                ocrPending = TextReader.isModelUnavailable(e)
+                if (!ocrPending && !loggedOcrError) {
+                    loggedOcrError = true
+                    DotLog.e("ocr: text recognition failed; indexing without text", e)
+                }
                 ""
             }
             val crops = clip.embedImage(bitmap, maxCrops)

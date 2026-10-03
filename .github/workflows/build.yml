@@ -139,6 +139,11 @@ jobs:
       - name: Test engine and model parity
         run: ./gradlew :core:engine:test --stacktrace
 
+      - name: Check regexes compile on Android's ICU engine
+        run: |
+          ls /usr/lib/x86_64-linux-gnu/libicui18n.so.* >/dev/null 2>&1 || sudo apt-get install -y -q libicu-dev
+          python3 tools/check_android_regex.py
+
       - name: Build Dot Screenshots
         run: |
           set -o pipefail
