@@ -77,43 +77,38 @@ class DateQueryParser(private val zone: ZoneId = ZoneId.systemDefault(), private
     }
 }
 
-/** Google Photos–style "Things": zero-shot CLIP tags for photos. */
-data class PhotoTag(val id: String, val label: String, val prompts: List<String>, val synonyms: List<String> = emptyList())
+/**
+ * Zero-shot CLIP tags for photos. They only decide which photos are worth reading text from (OCR
+ * costs battery); search uses the AI's descriptions and keywords instead.
+ */
+data class PhotoTag(val id: String, val prompts: List<String>)
 
 object PhotoTags {
     val ALL = listOf(
-        PhotoTag("food", "Food", listOf("a photo of food", "a plate of food", "a dish at a restaurant"), listOf("food", "dish", "meal", "lunch", "dinner", "breakfast")),
-        PhotoTag("dog", "Dogs", listOf("a photo of a dog", "a puppy"), listOf("dog", "dogs", "puppy", "pet", "pets")),
-        PhotoTag("cat", "Cats", listOf("a photo of a cat", "a kitten"), listOf("cat", "cats", "kitten", "pet", "pets")),
-        PhotoTag("selfie", "Selfies", listOf("a selfie", "a close-up photo of a person's face"), listOf("selfie", "selfies")),
-        PhotoTag("group", "Groups", listOf("a group photo of people", "friends posing together"), listOf("group", "friends", "family")),
-        PhotoTag("car", "Cars & bikes", listOf("a photo of a car", "a motorbike"), listOf("car", "cars", "bike", "vehicle")),
-        PhotoTag("mountain", "Mountains", listOf("a photo of mountains", "a hill landscape"), listOf("mountain", "mountains", "hills", "trek")),
-        PhotoTag("beach", "Beaches", listOf("a photo of a beach", "the sea and sand"), listOf("beach", "sea", "ocean")),
-        PhotoTag("sunset", "Sunsets", listOf("a photo of a sunset", "a sunrise sky"), listOf("sunset", "sunrise", "sky")),
-        PhotoTag("flower", "Flowers", listOf("a photo of flowers", "a garden with plants"), listOf("flower", "flowers", "plant", "garden")),
-        PhotoTag("city", "City", listOf("a city street", "buildings and skyline"), listOf("city", "street", "building", "buildings")),
-        PhotoTag("temple", "Temples & monuments", listOf("a temple", "a historic monument"), listOf("temple", "monument", "fort", "mandir")),
-        PhotoTag("celebration", "Celebrations", listOf("a birthday cake with candles", "a festival celebration with lights", "a wedding"), listOf("birthday", "party", "festival", "wedding", "diwali", "cake")),
-        PhotoTag("document", "Documents", listOf("a photo of a document", "a page of text", "an ID card"), listOf("document", "documents", "id", "card", "aadhaar", "pan")),
-        PhotoTag("receipt", "Receipts", listOf("a printed receipt", "a bill"), listOf("receipt", "receipts", "bill", "invoice")),
-        PhotoTag("screenshot", "Screenshots", listOf("a screenshot of a phone screen", "a screenshot of an app"), listOf("screenshot", "screenshots")),
-        PhotoTag("meme", "Memes", listOf("a meme with text over a picture"), listOf("meme", "memes")),
-        PhotoTag("sky", "Night sky", listOf("the night sky with stars", "the moon at night"), listOf("night", "stars", "moon")),
+        PhotoTag("food", listOf("a photo of food", "a plate of food", "a dish at a restaurant")),
+        PhotoTag("dog", listOf("a photo of a dog", "a puppy")),
+        PhotoTag("cat", listOf("a photo of a cat", "a kitten")),
+        PhotoTag("selfie", listOf("a selfie", "a close-up photo of a person's face")),
+        PhotoTag("group", listOf("a group photo of people", "friends posing together")),
+        PhotoTag("car", listOf("a photo of a car", "a motorbike")),
+        PhotoTag("mountain", listOf("a photo of mountains", "a hill landscape")),
+        PhotoTag("beach", listOf("a photo of a beach", "the sea and sand")),
+        PhotoTag("sunset", listOf("a photo of a sunset", "a sunrise sky")),
+        PhotoTag("flower", listOf("a photo of flowers", "a garden with plants")),
+        PhotoTag("city", listOf("a city street", "buildings and skyline")),
+        PhotoTag("temple", listOf("a temple", "a historic monument")),
+        PhotoTag("celebration", listOf("a birthday cake with candles", "a festival celebration with lights", "a wedding")),
+        PhotoTag("document", listOf("a photo of a document", "a page of text", "an ID card")),
+        PhotoTag("receipt", listOf("a printed receipt", "a bill")),
+        PhotoTag("screenshot", listOf("a screenshot of a phone screen", "a screenshot of an app")),
+        PhotoTag("meme", listOf("a meme with text over a picture")),
+        PhotoTag("sky", listOf("the night sky with stars", "the moon at night")),
     )
 
     val BACKGROUND = listOf("a photo", "a blurry photo", "an indoor photo of a room", "an object on a table")
 
     /** Tags whose photos are worth running OCR on. */
     val TEXT_HEAVY = setOf("document", "receipt", "screenshot", "meme")
-
-    fun byId(id: String) = ALL.firstOrNull { it.id == id }
-
-    fun matchQuery(query: String): List<String> {
-        val words = query.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }.toSet()
-        if (words.isEmpty() || words.size > 3) return emptyList()
-        return ALL.filter { t -> t.synonyms.any { it in words } }.map { it.id }
-    }
 }
 
 /** Assigns [PhotoTags] from crop embeddings via a softmax over tag + background prompts. */

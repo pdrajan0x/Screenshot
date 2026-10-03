@@ -7,8 +7,7 @@ import java.io.File
 
 /**
  * A model made of several files downloaded together (a vision model: language model + projector),
- * shown as one download with one progress bar. Each file lives in Download/AI Models like the
- * summary model.
+ * shown as one download with one progress bar. The files live in Download/AI Models.
  */
 class ModelBundle(context: Context, val label: String, specs: List<ModelSpec>) {
 
@@ -22,8 +21,8 @@ class ModelBundle(context: Context, val label: String, specs: List<ModelSpec>) {
 
     fun isReady(): Boolean = parts.all { it.isReady() }
 
-    /** The downloaded files in [parts] order, or null until all are there (picked files aren't supported here). */
-    fun files(): List<File>? = parts.map { (it.source() as? ModelSource.Local)?.file ?: return null }
+    /** The downloaded files in [parts] order, or null until all are there. */
+    fun files(): List<File>? = parts.map { it.file() ?: return null }
 
     /** Downloads the missing files one after the other; stops at the first that fails. */
     suspend fun download() {
@@ -39,9 +38,7 @@ class ModelBundle(context: Context, val label: String, specs: List<ModelSpec>) {
     fun downloadedBytes(): Long = parts.sumOf { if (it.isReady()) it.spec.sizeBytes else it.partialBytes() }
 
     /** Where the files are, for people ("Download/AI Models"), or null until downloaded. */
-    fun location(): String? = parts.firstNotNullOfOrNull { it.describeLocation() }?.substringBeforeLast('/')
-
-    fun delete() = parts.forEach { it.delete() }
+    fun location(): String? = parts.firstNotNullOfOrNull { it.describeLocation() }
 
     private fun combined(states: List<ModelDownloader.State>): ModelDownloader.State {
         if (states.all { it == ModelDownloader.State.Ready }) return ModelDownloader.State.Ready

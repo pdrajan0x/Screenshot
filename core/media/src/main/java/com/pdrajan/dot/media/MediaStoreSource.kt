@@ -74,19 +74,6 @@ class MediaStoreSource(private val context: Context) {
         (images + videos).sortedByDescending { it.modifiedAt }
     }
 
-    suspend fun byIds(ids: Collection<Long>, type: MediaType = MediaType.IMAGE): List<MediaItem> = withContext(Dispatchers.IO) {
-        if (ids.isEmpty()) return@withContext emptyList()
-        ids.chunked(500).flatMap { chunk ->
-            val placeholders = chunk.joinToString(",") { "?" }
-            query(
-                if (type == MediaType.IMAGE) imagesUri() else videosUri(),
-                type,
-                "${MediaStore.MediaColumns._ID} IN ($placeholders)",
-                chunk.map { it.toString() }.toTypedArray(),
-            )
-        }
-    }
-
     /** Emits whenever images or videos change on the device (debounce downstream). */
     fun changes(): Flow<Unit> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {

@@ -32,13 +32,6 @@ object MediaActions {
             null
         }
 
-    fun favoriteRequest(context: Context, uris: List<Uri>, favorite: Boolean): PendingIntent? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && uris.isNotEmpty()) {
-            MediaStore.createFavoriteRequest(context.contentResolver, uris, favorite)
-        } else {
-            null
-        }
-
     /**
      * Android 10 and older: delete directly. Android 10 may throw RecoverableSecurityException
      * for files another app created; callers fall back to asking the user.

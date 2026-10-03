@@ -45,6 +45,6 @@ class PowerGate(context: Context, private val policy: () -> ProcessingPolicy) {
         }
     }
 
-    /** Fewer threads on battery: a little slower, but the big cores aren't all at full power. */
-    fun threads(): Int = if (isCharging) LlamaEngine.defaultThreads() else 2
+    /** One thread per fast core while charging; at most two on battery (slower, but cooler and lighter). */
+    fun threads(): Int = if (isCharging) LlamaEngine.defaultThreads() else minOf(2, LlamaEngine.defaultThreads())
 }

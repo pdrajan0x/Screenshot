@@ -33,7 +33,6 @@ class FaceResult(val left: Float, val top: Float, val right: Float, val bottom: 
 
 class GalleryAnalysis(
     val cropEmbeddings: List<FloatArray>,
-    val tags: List<String>,
     val ocrText: String,
     val dHash: Long?,
     val sharpness: Double?,
@@ -321,7 +320,6 @@ class GalleryRepository(private val database: GalleryDatabase) {
         try {
             db.update("media", ContentValues().apply {
                 put("state", STATE_INDEXED)
-                put("tags", if (a.tags.isEmpty()) "" else a.tags.joinToString(",", ",", ","))
                 put("ocr_text", a.ocrText)
                 if (a.dHash != null) put("dhash", a.dHash) else putNull("dhash")
                 if (a.sharpness != null) put("sharpness", a.sharpness) else putNull("sharpness")

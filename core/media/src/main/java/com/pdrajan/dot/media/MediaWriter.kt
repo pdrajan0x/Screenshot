@@ -17,11 +17,6 @@ object MediaWriter {
 
     const val ALBUM_DIR = "Dot Gallery"
 
-    suspend fun saveJpeg(context: Context, bitmap: Bitmap, displayName: String, quality: Int = 95): Uri? =
-        insert(context, displayName, "image/jpeg", isVideo = false) { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
-        }
-
     suspend fun saveFile(context: Context, file: File, displayName: String, mimeType: String): Uri? =
         file.inputStream().use { input -> saveStream(context, input, displayName, mimeType) }
 

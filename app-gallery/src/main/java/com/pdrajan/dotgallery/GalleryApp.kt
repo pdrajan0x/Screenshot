@@ -75,7 +75,7 @@ class GalleryContainer(val context: Context) {
 
     /** The AI model both Dot apps share (Download/AI Models): descriptions and keywords. */
     val describerModel = SharedModel.bundle(context)
-    val describer = PhotoDescriber(context, repo, settings, describerModel, power, scope)
+    val describer = PhotoDescriber(context, repo, describerModel, power, scope)
     private var downloadJob: Job? = null
 
     /** Ids the viewer swipes through, set by whichever screen opened it. */
@@ -132,14 +132,6 @@ class GalleryContainer(val context: Context) {
 
     fun pauseDescriberDownload() {
         downloadJob?.cancel()
-    }
-
-    fun deleteDescriber() {
-        downloadJob?.cancel()
-        scope.launch {
-            describer.unload()
-            describerModel.delete()
-        }
     }
 
     fun stopProcessing() {

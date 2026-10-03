@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.provider.OpenableColumns
 import com.pdrajan.dot.media.DotLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -33,8 +32,6 @@ data class ModelSpec(
     val sizeBytes: Long,
     val sha256: String,
     val urls: List<String>,
-    /** Qwen3-style model whose thinking must be switched off in the prompt. */
-    val thinking: Boolean,
 )
 
 object Models {
@@ -52,7 +49,6 @@ object Models {
             "https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B-GGUF/resolve/main/LFM2.5-VL-1.6B-Q4_0.gguf",
             "https://github.com/pdrajan0x/Screenshot/releases/download/vlm-models-v1/LFM2.5-VL-1.6B-Q4_0.gguf",
         ),
-        thinking = false,
     )
 
     /** Its vision encoder and projector (mmproj): turns an image into tokens for [VISION_TEXT]. */
@@ -66,7 +62,6 @@ object Models {
             "https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B-GGUF/resolve/main/mmproj-LFM2.5-VL-1.6b-Q8_0.gguf",
             "https://github.com/pdrajan0x/Screenshot/releases/download/vlm-models-v1/mmproj-LFM2.5-VL-1.6b-Q8_0.gguf",
         ),
-        thinking = false,
     )
 
     /** Models earlier versions downloaded and nothing uses any more (offered for deletion). */
@@ -110,21 +105,11 @@ object SharedModel {
     }
 }
 
-/** Where a ready model lives. */
-sealed interface ModelSource {
-    /** A file this app can open by path: its own download, in shared or app storage. */
-    data class Local(val file: File) : ModelSource
-
-    /** A file chosen with the system file picker, e.g. one another app downloaded. */
-    data class Picked(val uri: Uri, val name: String) : ModelSource
-}
-
 /**
  * Resumable, checksum-verified download of a [ModelSpec].
  *
  * On Android 11 and newer the model goes to Download/AI Models, where it survives reinstalling and
- * other apps can open it through the file picker; older Android versions keep it in app storage.
- * A copy that is already on the phone can be picked instead of downloading again.
+ * the other Dot app can use it (with All files access); older Android versions keep it in app storage.
  */
 class ModelDownloader(private val context: Context, val spec: ModelSpec) {
 
@@ -150,25 +135,19 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
 
     private val lock = Mutex()
 
-    @Volatile private var current: ModelSource? = locate()
+    @Volatile private var current: File? = locate()
 
     private val _state = MutableStateFlow(if (current != null) State.Ready else State.Missing)
     val state: StateFlow<State> = _state.asStateFlow()
 
     fun isReady(): Boolean = current != null
 
-    /** The model to load, or null when it isn't on the phone (any more). */
-    fun source(): ModelSource? = current
+    /** The model file, or null when it isn't on the phone (any more). */
+    fun file(): File? = current
 
-    /** Where the model is, for people: "Download/AI Models/…", the picked file's name, or app storage. */
-    fun describeLocation(): String? = when (val s = current) {
-        is ModelSource.Picked -> s.name
-        is ModelSource.Local -> if (sharedDir != null && s.file.parentFile == sharedDir) {
-            "${Environment.DIRECTORY_DOWNLOADS}/$SHARED_FOLDER/${s.file.name}"
-        } else {
-            "app storage"
-        }
-        null -> null
+    /** Where the model is, for people: "Download/AI Models" or "app storage". */
+    fun describeLocation(): String? = current?.let { f ->
+        if (sharedDir != null && f.parentFile == sharedDir) "${Environment.DIRECTORY_DOWNLOADS}/$SHARED_FOLDER" else "app storage"
     }
 
     /** Re-checks the model is still there (it can be deleted from the Files app). */
@@ -178,19 +157,13 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
         if (s == State.Ready || s == State.Missing) _state.value = if (current != null) State.Ready else State.Missing
     }
 
-    private fun locate(): ModelSource? {
-        prefs.getString(KEY_URI + spec.id, null)?.let { saved ->
-            val uri = Uri.parse(saved)
-            val held = context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
-            if (held) return ModelSource.Picked(uri, prefs.getString(KEY_NAME + spec.id, null) ?: spec.fileName)
-            prefs.edit().remove(KEY_URI + spec.id).remove(KEY_NAME + spec.id).apply()
-        }
+    private fun locate(): File? {
         val candidates = listOfNotNull(
             prefs.getString(KEY_PATH + spec.id, null)?.let(::File),
             sharedDir?.let { File(it, spec.fileName) },
             File(privateDir, spec.fileName),
         )
-        return candidates.firstOrNull { complete(it) }?.let { ModelSource.Local(it) }
+        return candidates.firstOrNull { complete(it) }
     }
 
     private fun complete(f: File) = runCatching { f.isFile && f.length() == spec.sizeBytes }.getOrDefault(false)
@@ -233,7 +206,7 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
                     }
                     val file = moveIntoPlace(part)
                     prefs.edit().putString(KEY_PATH + spec.id, file.absolutePath).apply()
-                    current = ModelSource.Local(file)
+                    current = file
                     DotLog.i("llm: model downloaded from ${URL(url).host} to ${file.parent}")
                     _state.value = State.Ready
                     return@withLock
@@ -312,63 +285,6 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
         }
     }
 
-    /**
-     * Uses a model file chosen in the system file picker (one another app downloaded, or this
-     * app's own copy after a reinstall). It is read where it is, never copied.
-     */
-    suspend fun adopt(uri: Uri) = withContext(Dispatchers.IO) {
-        lock.withLock {
-            val previous = _state.value
-            try {
-                val resolver = context.contentResolver
-                val (name, size) = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
-                    if (!c.moveToFirst()) null else (c.getString(0) ?: spec.fileName) to (if (c.isNull(1)) -1L else c.getLong(1))
-                } ?: (spec.fileName to -1L)
-                if (size != spec.sizeBytes) {
-                    _state.value = State.Failed("That file isn't ${spec.label} (${spec.fileName}, ${spec.sizeBytes / 1_000_000} MB)", partialBytes())
-                    return@withLock
-                }
-                _state.value = State.Verifying
-                val hash = resolver.openInputStream(uri)?.use(::sha256) ?: throw IOException("could not open the file")
-                if (hash != spec.sha256) {
-                    _state.value = State.Failed("That file is damaged or a different version of ${spec.label}", partialBytes())
-                    return@withLock
-                }
-                resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                prefs.edit().putString(KEY_URI + spec.id, uri.toString()).putString(KEY_NAME + spec.id, name).apply()
-                existingPart()?.delete()
-                current = ModelSource.Picked(uri, name)
-                DotLog.i("llm: using a picked model file")
-                _state.value = State.Ready
-            } catch (e: CancellationException) {
-                _state.value = previous
-                throw e
-            } catch (e: Exception) {
-                DotLog.w("llm: could not use the picked file", e)
-                _state.value = State.Failed("Couldn't read that file: ${e.message}", partialBytes())
-            }
-        }
-    }
-
-    /**
-     * Deletes the downloaded model (from the shared folder too: other apps lose it as well), or
-     * stops using a picked file without touching it.
-     */
-    fun delete() {
-        when (val s = current) {
-            is ModelSource.Picked -> runCatching {
-                context.contentResolver.releasePersistableUriPermission(s.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            is ModelSource.Local -> s.file.delete()
-            null -> Unit
-        }
-        listOfNotNull(sharedDir, privateDir).forEach { partIn(it).delete() }
-        File(privateDir, spec.fileName).delete()
-        prefs.edit().remove(KEY_URI + spec.id).remove(KEY_NAME + spec.id).remove(KEY_PATH + spec.id).apply()
-        current = locate()
-        _state.value = if (current != null) State.Ready else State.Missing
-    }
-
     private fun sha256(input: InputStream): String {
         val md = MessageDigest.getInstance("SHA-256")
         val buf = ByteArray(1 shl 20)
@@ -383,8 +299,6 @@ class ModelDownloader(private val context: Context, val spec: ModelSpec) {
     companion object {
         /** Under Download; a plain name so people (and other apps' file pickers) can find it. */
         const val SHARED_FOLDER = "AI Models"
-        private const val KEY_URI = "uri:"
-        private const val KEY_NAME = "name:"
         private const val KEY_PATH = "path:"
     }
 }

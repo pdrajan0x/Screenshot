@@ -8,7 +8,6 @@ import com.pdrajan.dot.llm.PowerGate
 import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.ml.RgbImage
 import com.pdrajan.dotgallery.data.GalleryRepository
-import com.pdrajan.dotgallery.data.GallerySettings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,7 +34,6 @@ import kotlinx.coroutines.withContext
 class PhotoDescriber(
     private val context: Context,
     private val repo: GalleryRepository,
-    private val settings: GallerySettings,
     val model: ModelBundle,
     private val power: PowerGate,
     private val scope: CoroutineScope,
@@ -81,7 +79,7 @@ class PhotoDescriber(
                 currentCoroutineContext().ensureActive()
                 val itemStart = System.currentTimeMillis()
                 try {
-                    val rgb = withContext(Dispatchers.IO) { RgbImage.load(context.contentResolver, job.uri, MAX_SIDE) }
+                    val rgb = withContext(Dispatchers.IO) { RgbImage.load(context.contentResolver, job.uri, VisionPrompts.PHOTO_IMAGE_TOKENS * VisionPrompts.PIXELS_PER_IMAGE_TOKEN) }
                     val answer = VisionPrompts.parsePhoto(describe(vlm, rgb))
                     if (answer == null) {
                         repo.markCaptionFailed(job.id)
@@ -114,7 +112,7 @@ class PhotoDescriber(
         val files = model.files() ?: return null
         val threads = power.threads()
         val llm = LlamaEngine.load(context, files[0], contextTokens = 2048, threads = threads) ?: return null
-        if (!llm.loadVision(files[1], threads, MAX_IMAGE_TOKENS)) {
+        if (!llm.loadVision(files[1], threads, VisionPrompts.PHOTO_IMAGE_TOKENS)) {
             llm.close()
             return null
         }
@@ -153,17 +151,5 @@ class PhotoDescriber(
                 engine = null
             }
         }
-    }
-
-    /** After the model files are deleted. */
-    suspend fun unload() = lock.withLock {
-        engine?.close()
-        engine = null
-    }
-
-    companion object {
-        private const val MAX_SIDE = 512
-        // Enough detail for a sentence and keywords; fewer image tokens are much slower with this model.
-        private const val MAX_IMAGE_TOKENS = 128
     }
 }

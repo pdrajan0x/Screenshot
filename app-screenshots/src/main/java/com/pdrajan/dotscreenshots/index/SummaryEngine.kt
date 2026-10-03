@@ -85,7 +85,7 @@ class SummaryEngine(
                     currentCoroutineContext().ensureActive()
                     val itemStart = System.currentTimeMillis()
                     try {
-                        val image = withContext(Dispatchers.IO) { RgbImage.load(context.contentResolver, job.uri, MAX_SIDE) }
+                        val image = withContext(Dispatchers.IO) { RgbImage.load(context.contentResolver, job.uri, VisionPrompts.SCREENSHOT_IMAGE_TOKENS * VisionPrompts.PIXELS_PER_IMAGE_TOKEN) }
                         val parsed = SummaryParser.parse(describe(vlm, image, VisionPrompts.screenshot(job.text, job.app)))
                         if (parsed == null) {
                             DotLog.w("summary: unreadable answer for ${job.name}")
@@ -120,7 +120,7 @@ class SummaryEngine(
         val threads = power.threads()
         // Screen text (up to 1,000 characters) plus 128 image tokens and the answer.
         val llm = LlamaEngine.load(context, files[0], contextTokens = 2048, threads = threads) ?: return null
-        if (!llm.loadVision(files[1], threads, MAX_IMAGE_TOKENS)) {
+        if (!llm.loadVision(files[1], threads, VisionPrompts.SCREENSHOT_IMAGE_TOKENS)) {
             llm.close()
             return null
         }
@@ -159,17 +159,5 @@ class SummaryEngine(
                 engine = null
             }
         }
-    }
-
-    /** After the model files are deleted. */
-    suspend fun unload() = lock.withLock {
-        engine?.close()
-        engine = null
-    }
-
-    private companion object {
-        const val MAX_SIDE = 512
-        // Enough detail to read the layout; fewer image tokens are much slower with this model.
-        const val MAX_IMAGE_TOKENS = 128
     }
 }

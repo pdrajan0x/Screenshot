@@ -30,7 +30,7 @@ object VisionPrompts {
     fun screenshot(screenText: String, knownApp: String?): String = buildString {
         append("This is a phone screenshot.")
         knownApp?.takeIf { it.isNotBlank() }?.let { append(" It was taken in ").append(it).append('.') }
-        val text = SummaryPrompt.clip(screenText.trim(), MAX_SCREEN_CHARS)
+        val text = clip(screenText.trim(), MAX_SCREEN_CHARS)
         if (text.isNotEmpty()) append(" Text read from it:\n").append(text)
         append("\n\nAnswer in exactly this format:\n")
         append("Title: <3-8 words: what this is>\n")
@@ -49,8 +49,26 @@ object VisionPrompts {
     /** Most screens fit; long scrolling captures are cut at a line boundary to keep it quick. */
     const val MAX_SCREEN_CHARS = 1000
 
+    /**
+     * How many tokens a picture becomes. Photos: 64 (a ~256 px view) describes them as well as 128
+     * in tests, about 30% faster. Screenshots: 128, since a dense screen needs the detail; their text
+     * comes from OCR anyway.
+     */
+    const val PHOTO_IMAGE_TOKENS = 64
+    const val SCREENSHOT_IMAGE_TOKENS = 128
+
+    /** Pixels per image token (16 px patches, merged 2×2): the picture size that fills a token budget. */
+    const val PIXELS_PER_IMAGE_TOKEN = 1024
+
     /** Room for the longest grammar-shaped answer. */
     const val MAX_TOKENS = 140
+
+    /** Cuts long text at a line boundary near [max] characters. */
+    internal fun clip(text: String, max: Int): String {
+        if (text.length <= max) return text
+        val cut = text.lastIndexOf('\n', max).takeIf { it > max / 2 } ?: max
+        return text.substring(0, cut)
+    }
 
     fun parsePhoto(output: String): PhotoDescription? {
         var description = ""

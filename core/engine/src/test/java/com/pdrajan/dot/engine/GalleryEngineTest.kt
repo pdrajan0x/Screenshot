@@ -121,10 +121,4 @@ class ImageQualityTest {
         // The look-alike check can veto a hash match.
         assertTrue(ImageQuality.duplicateGroups(burst, same = { _, _ -> false }).isEmpty())
     }
-
-    @Test
-    fun tagQueryIntent() {
-        assertEquals(listOf("dog", "cat"), PhotoTags.matchQuery("pets"))
-        assertEquals(listOf("food"), PhotoTags.matchQuery("food"))
-    }
 }

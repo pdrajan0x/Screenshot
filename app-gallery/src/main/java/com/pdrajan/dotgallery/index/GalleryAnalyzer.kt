@@ -16,8 +16,8 @@ import com.pdrajan.dotgallery.data.GalleryRepository
 import java.io.File
 
 /**
- * One photo or video → CLIP embeddings, "Things" tags, perceptual hash, blur score, faces, and
- * (only for text-heavy photos, to save battery) OCR.
+ * One photo or video → CLIP embeddings, perceptual hash, blur score, faces, and (only for
+ * text-heavy photos, which CLIP tags pick out, to save battery) OCR.
  */
 class GalleryAnalyzer(
     private val context: Context,
@@ -52,7 +52,6 @@ class GalleryAnalyzer(
             }
             return GalleryAnalysis(
                 cropEmbeddings = crops,
-                tags = if (isScreenshot && "screenshot" !in tags) tags + "screenshot" else tags,
                 ocrText = text,
                 dHash = dHash(bitmap),
                 sharpness = if (item.isVideo) null else sharpness(bitmap),

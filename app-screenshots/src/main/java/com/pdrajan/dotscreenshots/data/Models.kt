@@ -25,7 +25,7 @@ data class Shot(
     val app: String?,
     val categories: List<String>,
     val favorite: Boolean,
-    /** Written by the on-device summary model; null until then. */
+    /** Written by the on-device AI model; null until then. */
     val title: String? = null,
     /** The AI has summarised it (a tiny red dot on its thumbnail). */
     val summarized: Boolean = false,
@@ -51,7 +51,7 @@ data class ShotDetail(
     val appGuessed: Boolean get() = appSource == null || appSource == "guess" || appSource == "model" || appSource == "visual"
 }
 
-/** Progress of the summary model over the library. */
+/** Progress of the AI summaries over the library. */
 data class SummaryCounts(val done: Int, val waiting: Int)
 
 /** A screenshot waiting for its summary. */

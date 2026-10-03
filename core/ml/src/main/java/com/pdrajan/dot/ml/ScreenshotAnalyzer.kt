@@ -21,7 +21,7 @@ enum class AppSource(val code: String) {
     FILE("file"),
     /** Recognised from how the screen looks and its text. */
     VISUAL("visual"),
-    /** The summary model named it (with supporting text clues). */
+    /** Earlier versions: the old summary model named it. */
     MODEL("model"),
     /** Best guess from everything known (see AppIdentifier), with a confidence. */
     GUESS("guess"),

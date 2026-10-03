@@ -9,17 +9,7 @@ import java.io.File
 object LlamaNative {
     @JvmStatic external fun nativeInit(backendDir: String?)
     @JvmStatic external fun nativeSystemInfo(): String
-    /** Loads from [path], or from the open file descriptor [fd] when it is >= 0 (the path is then ignored). */
-    @JvmStatic external fun nativeLoad(path: String?, fd: Int, nCtx: Int, nThreads: Int): Long
-    @JvmStatic external fun nativeCountTokens(handle: Long, text: ByteArray): Int
-    @JvmStatic external fun nativeGenerate(
-        handle: Long,
-        prompt: ByteArray,
-        grammar: ByteArray?,
-        maxTokens: Int,
-        temperature: Float,
-        seed: Int,
-    ): ByteArray?
+    @JvmStatic external fun nativeLoad(path: String, nCtx: Int, nThreads: Int): Long
     /** Loads a vision projector (mmproj) for the loaded model; [maxImageTokens] > 0 caps tokens per image. */
     @JvmStatic external fun nativeLoadVision(handle: Long, mmprojPath: String, nThreads: Int, maxImageTokens: Int): Boolean
     /** Answers [instruction] about an RGB image (3 bytes per pixel, row by row). */
@@ -48,16 +38,6 @@ class LlamaEngine private constructor(handle: Long) : Closeable {
     @Volatile private var handle: Long = handle
     private val lock = Any()
 
-    /** Blocking; run off the main thread. [grammar] is GBNF constraining the output. */
-    fun generate(prompt: String, grammar: String? = null, maxTokens: Int = 160, temperature: Float = 0f): String =
-        synchronized(lock) {
-            val h = handle
-            if (h == 0L) throw LlmException("model closed")
-            val out = LlamaNative.nativeGenerate(h, prompt.toByteArray(), grammar?.toByteArray(), maxTokens, temperature, 0)
-                ?: throw LlmException(LlamaNative.nativeLastError(h))
-            String(out, Charsets.UTF_8)
-        }
-
     /** Lets [describe] see images: loads a vision model's projector file. */
     fun loadVision(mmproj: File, threads: Int = defaultThreads(), maxImageTokens: Int = 0): Boolean = synchronized(lock) {
         val h = handle
@@ -76,12 +56,7 @@ class LlamaEngine private constructor(handle: Long) : Closeable {
         String(out, Charsets.UTF_8)
     }
 
-    fun countTokens(text: String): Int = synchronized(lock) {
-        val h = handle
-        if (h == 0L) 0 else LlamaNative.nativeCountTokens(h, text.toByteArray())
-    }
-
-    /** Stops a running [generate] or [describe] early (it then throws). Safe from any thread. */
+    /** Stops a running [describe] early (it then throws). Safe from any thread. */
     fun cancel() {
         val h = handle
         if (h != 0L) LlamaNative.nativeCancel(h)
@@ -114,35 +89,39 @@ class LlamaEngine private constructor(handle: Long) : Closeable {
             initialised
         }
 
-        fun load(context: Context, model: File, contextTokens: Int = 2048, threads: Int = defaultThreads()): LlamaEngine? =
-            load(context, ModelSource.Local(model), contextTokens, threads)
-
-        fun load(context: Context, model: ModelSource, contextTokens: Int = 2048, threads: Int = defaultThreads()): LlamaEngine? {
-            if (!init(context)) return null
+        fun load(context: Context, model: File, contextTokens: Int = 2048, threads: Int = defaultThreads()): LlamaEngine? {
+            if (!init(context) || !model.exists()) return null
             val started = System.currentTimeMillis()
-            val h = when (model) {
-                is ModelSource.Local -> {
-                    if (!model.file.exists()) return null
-                    LlamaNative.nativeLoad(model.file.absolutePath, -1, contextTokens, threads)
-                }
-                // The native side keeps its own duplicate of the descriptor.
-                is ModelSource.Picked -> runCatching {
-                    context.contentResolver.openFileDescriptor(model.uri, "r")?.use { LlamaNative.nativeLoad(null, it.fd, contextTokens, threads) }
-                }.onFailure { DotLog.e("llm: could not open the picked model file", it) }.getOrNull() ?: 0L
-            }
-            val name = when (model) {
-                is ModelSource.Local -> model.file.name
-                is ModelSource.Picked -> model.name
-            }
+            val h = LlamaNative.nativeLoad(model.absolutePath, contextTokens, threads)
             if (h == 0L) {
-                DotLog.e("llm: failed to load $name")
+                DotLog.e("llm: failed to load ${model.name}")
                 return null
             }
-            DotLog.i("llm: loaded $name with $threads threads in ${System.currentTimeMillis() - started} ms")
+            DotLog.i("llm: loaded ${model.name} with $threads threads in ${System.currentTimeMillis() - started} ms")
             return LlamaEngine(h)
         }
 
-        /** Big cores do the work; little ones mostly add contention. */
-        fun defaultThreads(): Int = (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4)
+        /**
+         * One thread per fast core (prime + big), at most 4. Many budget phones have only two fast
+         * cores next to six slow ones: a job split across all of them waits for the slow ones and
+         * burns more power for less speed.
+         */
+        fun defaultThreads(): Int = bigCores.coerceIn(1, 4)
+
+        private val bigCores: Int by lazy {
+            val n = Runtime.getRuntime().availableProcessors()
+            fun read(cpu: Int, name: String): Long? =
+                runCatching { File("/sys/devices/system/cpu/cpu$cpu/$name").readText().trim().toLong() }.getOrNull()
+            // Scheduler capacity (1024 for the fastest core) where the kernel reports it; else max clocks.
+            val capacity = (0 until n).map { read(it, "cpu_capacity") }
+            val clocks = (0 until n).map { read(it, "cpufreq/cpuinfo_max_freq") }
+            val count = when {
+                capacity.all { it != null } -> capacity.filterNotNull().let { c -> c.count { it >= c.max() / 2 } }
+                clocks.all { it != null } -> clocks.filterNotNull().let { c -> if (c.distinct().size > 1) c.count { it > c.min() } else n / 2 }
+                else -> n - 2
+            }
+            DotLog.i("llm: $count fast cores of $n")
+            count
+        }
     }
 }

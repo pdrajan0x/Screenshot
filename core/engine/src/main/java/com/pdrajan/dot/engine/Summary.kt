@@ -3,7 +3,7 @@ package com.pdrajan.dot.engine
 /** One line of OCR text with its vertical position, as a fraction of the image height (0 = top). */
 data class OcrLine(val text: String, val top: Float, val bottom: Float)
 
-/** What the on-device language model wrote about a screenshot. */
+/** What the on-device vision model wrote about a screenshot. */
 data class ScreenshotSummary(
     val title: String,
     val summary: String,
@@ -12,54 +12,7 @@ data class ScreenshotSummary(
     val tags: List<String>,
 )
 
-/**
- * Prompt for the summary model (Qwen3 / Qwen2.5 ChatML). The model sees the source app when we
- * know it and the OCR text top to bottom, and answers in a fixed four-line format enforced by
- * [GRAMMAR].
- */
-object SummaryPrompt {
-
-    const val SYSTEM =
-        "You write search labels for phone screenshots. You get the source app (if known) and the text read " +
-            "from the screen by OCR, top to bottom. OCR can be messy and may mix Hindi, Hinglish and English.\n" +
-            "Reply in English, in exactly this format:\n" +
-            "Title: <3-8 words: what this is and who or what it is about>\n" +
-            "Summary: <1-2 plain sentences with the key facts: names, amounts, dates, places, items, what was said or done>\n" +
-            "App: <the app this screenshot is from, or unknown>\n" +
-            "Tags: <6-10 lowercase search keywords, comma separated: the app, people, topics and the kind of screen>\n" +
-            "Rules: use ₹ for Indian rupees. In a chat, the name at the top is the person being chatted with. " +
-            "Only use facts from the screen."
-
-    /** GBNF grammar: the four labelled lines, nothing else. */
-    const val GRAMMAR =
-        "root ::= \"Title: \" txt \"\\nSummary: \" txt \"\\nApp: \" txt \"\\nTags: \" txt \"\\n\"?\n" +
-            "txt ::= [^\\n]+\n"
-
-    /** Most screens fit; long scrolling captures are cut at a line boundary to keep it quick. */
-    const val MAX_SCREEN_CHARS = 1400
-
-    fun build(app: String?, screenText: String, thinkingModel: Boolean = true): String {
-        val text = clip(screenText.trim(), MAX_SCREEN_CHARS)
-        val user = buildString {
-            app?.takeIf { it.isNotBlank() }?.let { append("App: ").append(it).append('\n') }
-            append("Screen text:\n").append(text.ifEmpty { "(no text on screen)" })
-        }
-        return buildString {
-            append("<|im_start|>system\n").append(SYSTEM).append("<|im_end|>\n")
-            append("<|im_start|>user\n").append(user).append("<|im_end|>\n")
-            append("<|im_start|>assistant\n")
-            // Qwen3 thinks out loud by default; an empty think block switches that off.
-            if (thinkingModel) append("<think>\n\n</think>\n\n")
-        }
-    }
-
-    internal fun clip(text: String, max: Int): String {
-        if (text.length <= max) return text
-        val cut = text.lastIndexOf('\n', max).takeIf { it > max / 2 } ?: max
-        return text.substring(0, cut)
-    }
-}
-
+/** Reads the vision model's labelled answer (Title / Summary / App / Keywords) for a screenshot. */
 object SummaryParser {
 
     private val FIELD = Regex("^\\s*(title|summary|app|tags|keywords)\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)

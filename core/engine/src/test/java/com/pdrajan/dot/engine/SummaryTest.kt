@@ -9,7 +9,7 @@ class SummaryTest {
 
     @Test
     fun parsesModelOutputWithTrailingSpacesAndHyphenTags() {
-        // Verbatim Qwen3-1.7B output for a Google Pay receipt.
+        // A Google Pay receipt, with the trailing spaces and hyphenated keywords small models write.
         val out = "Title: Google Pay UPI Transaction  \n" +
             "Summary: ₹499 paid to Rahul Sharma on 3 Oct 2026 via UPI transaction ID 427519836104  \n" +
             "App: Google Pay  \n" +
@@ -29,19 +29,9 @@ class SummaryTest {
     }
 
     @Test
-    fun promptCarriesAppAndDisablesThinking() {
-        val p = SummaryPrompt.build("WhatsApp", "Deepanshu Arya\nbana di pure ?")
-        assertTrue(p.contains("App: WhatsApp\nScreen text:\nDeepanshu Arya"))
-        assertTrue(p.endsWith("<|im_start|>assistant\n<think>\n\n</think>\n\n"))
-        assertTrue(SummaryPrompt.build(null, "x", thinkingModel = false).endsWith("<|im_start|>assistant\n"))
-        // An uncertain app isn't mentioned at all: an "App: unknown" line just gets copied into the answer.
-        assertTrue(SummaryPrompt.build(null, "x").contains("<|im_start|>user\nScreen text:\nx"))
-    }
-
-    @Test
     fun longScreensAreCutAtALineBoundary() {
         val text = (1..400).joinToString("\n") { "line number $it" }
-        val clipped = SummaryPrompt.clip(text, 200)
+        val clipped = VisionPrompts.clip(text, 200)
         assertTrue(clipped.length <= 200)
         assertTrue(clipped.endsWith(clipped.lines().last()) && clipped.lines().last().startsWith("line number"))
     }

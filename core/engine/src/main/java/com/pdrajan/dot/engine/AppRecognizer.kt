@@ -76,12 +76,10 @@ object AppRecognizer {
 
     /**
      * @param visual CLIP probabilities over [VISUAL]'s keys (softmax), or null if unavailable.
-     * @param modelGuess the summary model's "App:" answer, a weak extra hint.
      */
-    fun recognize(text: String, visual: Map<String, Float>?, modelGuess: String? = null): Guess? {
+    fun recognize(text: String, visual: Map<String, Float>?): Guess? {
         val scores = HashMap(textScores(text.lowercase()))
         visual?.forEach { (label, p) -> if (!label.startsWith("~")) scores.merge(label, p * 1.5f, Float::plus) }
-        modelGuess?.let { g -> canonical(g)?.let { scores.merge(it, 0.4f, Float::plus) } }
         val best = scores.maxByOrNull { it.value } ?: return null
         val second = scores.filterKeys { it != best.key }.values.maxOrNull() ?: 0f
         return if (best.value >= 1f && best.value - second >= 0.25f) Guess(best.key, best.value) else null

@@ -206,13 +206,6 @@ private fun PickerRow(icon: ImageVector, label: String, trailing: String? = null
     }
 }
 
-@Composable
-fun Thumbnail(uri: Uri?, modifier: Modifier = Modifier) {
-    Box(modifier) {
-        MediaThumbnail(model = uri, cornerRadius = 16.dp, aspectRatio = 1f, onClick = {})
-    }
-}
-
 // ---------------------------------------------------------------- entity actions
 
 data class EntityAction(val icon: ImageVector, val label: String, val run: (Context) -> Unit)
@@ -261,13 +254,5 @@ fun SheetSection(title: String, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
         Text(title.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Box(Modifier.padding(top = 8.dp)) { content() }
-    }
-}
-
-@Composable
-fun IconLabel(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium)
     }
 }

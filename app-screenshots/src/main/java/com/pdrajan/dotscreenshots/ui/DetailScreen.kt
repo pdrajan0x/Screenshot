@@ -162,8 +162,6 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
         c.repo.addToCollection(id, listOf(current.value))
     }
 
-    fun removeFrom(collectionId: Long) = viewModelScope.launch { c.repo.removeFromCollection(collectionId, listOf(current.value)) }
-
     fun forget(id: Long) = viewModelScope.launch { c.repo.forget(listOf(id)) }
 
     suspend fun appChoices(): List<AppIdentification.AppChoice> = c.engine.apps.choices()
