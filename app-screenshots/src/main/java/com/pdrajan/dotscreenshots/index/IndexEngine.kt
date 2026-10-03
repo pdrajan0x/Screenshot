@@ -31,6 +31,8 @@ class IndexEngine(
     private val settings: Settings,
     private val hub: ModelHub,
     private val media: MediaStoreSource,
+    /** Whether library-wide work may run now (app open or charging), not just new screenshots. */
+    heavyWorkAllowed: () -> Boolean,
 ) {
     private val _progress = MutableStateFlow(IndexProgress())
     val progress: StateFlow<IndexProgress> = _progress.asStateFlow()
@@ -58,7 +60,7 @@ class IndexEngine(
     }
 
     /** A source app for every screenshot: from its file name, set by the user, or the best guess. */
-    val apps = AppIdentification(context, repo, hub, InstalledApps(context))
+    val apps = AppIdentification(context, repo, hub, InstalledApps(context), heavyWorkAllowed)
 
     /**
      * Analyses up to [limit] pending screenshots, newest first. Stops early at [deadline]
@@ -66,6 +68,8 @@ class IndexEngine(
      */
     suspend fun process(limit: Int, deadline: Long = Long.MAX_VALUE, isStopped: () -> Boolean = { false }): Int =
         batchLock.withLock {
+            // Most wake-ups (any new image on the phone) find nothing to do: check before loading anything.
+            if (repo.ocrPendingCount() == 0 && repo.pending(1).isEmpty()) return 0
             var done = 0
             var failed = 0
             val batchStart = System.currentTimeMillis()

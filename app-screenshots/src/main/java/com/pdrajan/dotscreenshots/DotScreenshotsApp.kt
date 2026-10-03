@@ -48,8 +48,15 @@ class DotScreenshotsApp : Application(), SingletonImageLoader.Factory {
         container = AppContainer(this)
         container.scheduler.watchForNewScreenshots()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) = container.onForeground()
-            override fun onStop(owner: LifecycleOwner) = container.onBackground()
+            override fun onStart(owner: LifecycleOwner) {
+                container.visible = true
+                container.onForeground()
+            }
+
+            override fun onStop(owner: LifecycleOwner) {
+                container.visible = false
+                container.onBackground()
+            }
         })
     }
 
@@ -68,10 +75,15 @@ class AppContainer(val context: Context) {
     val repo = ShotsRepository(ShotsDatabase(context))
     val media = MediaStoreSource(context)
     val hub = ModelHub(context, scope)
-    val engine = IndexEngine(context, repo, settings, hub, media)
+    val power = PowerGate(context)
+
+    /** The app is on screen (between onStart and onStop). */
+    @Volatile var visible = false
+
+    // Library-wide passes (re-guessing every screenshot's app) wait until the app is open or charging.
+    val engine = IndexEngine(context, repo, settings, hub, media) { visible || power.isCharging }
     val scheduler = IndexScheduler(context) { settings.backlogWhileCharging.value }
     val modelDownload = ModelDownloader(context, Models.SUMMARY)
-    val power = PowerGate(context)
     val summaries = SummaryEngine(context, repo, settings, modelDownload, power, scope)
 
     init {
@@ -106,14 +118,19 @@ class AppContainer(val context: Context) {
                 // On battery only the newest few, and only when PowerGate allows.
                 summaries.process(limit = 3, since = System.currentTimeMillis() - RECENT_MILLIS)
             }
-            if (repo.counts().pending > 0 || (summaries.available && repo.summaryCounts().waiting > 0)) scheduler.scheduleBacklog()
+            if (repo.counts().pending > 0) {
+                scheduler.scheduleBacklog()
+            } else if (summaries.available && repo.summaryCounts().waiting > 0) {
+                scheduler.scheduleBacklog(requireCharging = true)
+            }
         }
     }
 
     private fun unrestricted() = power.isCharging || !settings.backlogWhileCharging.value
 
+    /** Left the app: work started from the screen stops (even "Process now"), unless the phone is charging. */
     fun onBackground() {
-        if (!_backlogRunning.value) foregroundJob?.cancel()
+        if (!_backlogRunning.value || !power.isCharging) foregroundJob?.cancel()
     }
 
     /** "Process now": read every pending screenshot, then write every summary, while the app stays open. */

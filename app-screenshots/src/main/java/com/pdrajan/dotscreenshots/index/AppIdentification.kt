@@ -27,6 +27,8 @@ class AppIdentification(
     private val repo: ShotsRepository,
     private val hub: ModelHub,
     private val installed: InstalledApps,
+    /** Re-guessing the whole library (seconds of CPU) only happens when this allows: app open or charging. */
+    private val fullPassAllowed: () -> Boolean,
 ) {
     private val lock = Mutex()
     private val prefs = context.getSharedPreferences("app_identification", Context.MODE_PRIVATE)
@@ -50,13 +52,20 @@ class AppIdentification(
     }
 
     private suspend fun guess(relearn: Boolean): Int {
-        val known = repo.knownAppShots()
+        // Two quick counts decide whether there's anything to do; usually there isn't, and then
+        // nothing else is loaded (this runs after every new image on the phone).
+        val knownCount = repo.knownAppCount()
+        val newShots = repo.hasUnguessedApps()
+        val learnedFrom = prefs.getInt(KEY_KNOWN, -1)
+        val learnedMore = knownCount < learnedFrom || knownCount >= learnedFrom + maxOf(5, learnedFrom / 10)
+        val fullAllowed = fullPassAllowed()
+        if (!newShots && !(fullAllowed && (relearn || learnedMore))) return 0
+
         val candidates = candidates()
         val candidateKey = candidates.joinToString("|") { it.label }.hashCode()
-        val learnedFrom = prefs.getInt(KEY_KNOWN, -1)
-        val all = relearn || prefs.getInt(KEY_CANDIDATES, 0) != candidateKey ||
-            known.size < learnedFrom || known.size >= learnedFrom + maxOf(5, learnedFrom / 10)
-        if (!all && repo.guessTargets(all = false, afterId = Long.MIN_VALUE, limit = 1).isEmpty()) return 0
+        val all = fullAllowed && (relearn || learnedMore || prefs.getInt(KEY_CANDIDATES, 0) != candidateKey)
+        if (!all && !newShots) return 0
+        val known = repo.knownAppShots()
         val clip = hub.clip() ?: return 0
 
         val started = System.currentTimeMillis()
@@ -80,7 +89,8 @@ class AppIdentification(
             afterId = batch.last().id
             currentCoroutineContext().ensureActive()
         }
-        prefs.edit().putInt(KEY_KNOWN, known.size).putInt(KEY_CANDIDATES, candidateKey).apply()
+        // Only a full pass counts as having learned from everything known so far.
+        if (all) prefs.edit().putInt(KEY_KNOWN, known.size).putInt(KEY_CANDIDATES, candidateKey).apply()
         DotLog.i(
             "apps: guessed $guessed screenshots (${if (all) "all" else "new only"}, $moved changed) from ${identifier.size} apps " +
                 "and ${known.size} certain screenshots in ${System.currentTimeMillis() - started} ms",

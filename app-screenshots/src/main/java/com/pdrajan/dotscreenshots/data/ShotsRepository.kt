@@ -559,6 +559,18 @@ class ShotsRepository(private val database: ShotsDatabase) {
         rewriteFts(id)
     }
 
+    /** How many screenshots have a certain app (cheap: no embeddings loaded). */
+    fun knownAppCount(): Int =
+        db.rawQuery("SELECT COUNT(*) FROM shots WHERE app IS NOT NULL AND app_source IN ('usage', 'file', 'user')", null)
+            .use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    /** Whether any indexed screenshot still waits for its first app guess (cheap). */
+    fun hasUnguessedApps(): Boolean =
+        db.rawQuery(
+            "SELECT 1 FROM shots WHERE state = ? AND $UNCERTAIN_APP AND app_confidence IS NULL LIMIT 1",
+            arrayOf(IndexState.INDEXED.code.toString()),
+        ).use { it.moveToFirst() }
+
     /** Screenshots whose app is certain, with their look, to learn from. */
     suspend fun knownAppShots(): List<KnownShot> {
         ensureVectors()

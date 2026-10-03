@@ -28,32 +28,48 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
         runCatching { container.engine.sync() }
 
+        // The summary model (seconds of full CPU each) never runs in the background on battery:
+        // it waits for the charger, or for the app to be opened. Unplugging stops it mid-batch.
+        val power = container.power
+        val summariesStopped = { isStopped || !power.isCharging }
         var indexed = 0
+        var summarised = 0
         if (mode == MODE_NEW) {
             indexed = container.engine.process(limit = 30, deadline = deadline) { isStopped }
-            // A few seconds each: new screenshots get their summary right away, even on battery.
-            indexed += container.summaries.process(limit = 3, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline) { isStopped }
+            if (power.isCharging) {
+                summarised = container.summaries.process(
+                    limit = 3, since = System.currentTimeMillis() - 2 * 24 * 60 * 60_000L, deadline = deadline, isStopped = summariesStopped,
+                )
+            }
         } else {
             while (!isStopped && System.currentTimeMillis() < deadline) {
                 val n = container.engine.process(limit = 50, deadline = deadline) { isStopped }
                 if (n == 0) break
                 indexed += n
             }
-            while (!isStopped && System.currentTimeMillis() < deadline) {
-                val n = container.summaries.process(limit = 5, deadline = deadline) { isStopped }
+            while (!summariesStopped() && System.currentTimeMillis() < deadline) {
+                val n = container.summaries.process(limit = 5, deadline = deadline, isStopped = summariesStopped)
                 if (n == 0) break
-                indexed += n
+                summarised += n
             }
         }
 
-        val pending = container.repo.counts().pending +
-            if (container.summaries.available) container.repo.summaryCounts().waiting else 0
+        val toRead = container.repo.counts().pending
+        val toSummarise = if (container.summaries.available) container.repo.summaryCounts().waiting else 0
         val scheduler = container.scheduler
         if (mode == MODE_NEW) scheduler.watchForNewScreenshots(afterCurrent = true)
-        // Only chain another backlog run when this one got somewhere; a run that indexed nothing
+        // Only chain another backlog run when this one got somewhere; a run that did nothing
         // (a persistent error) waits for the next app open or screenshot instead of looping.
-        if (pending > 0 && (indexed > 0 || mode == MODE_NEW)) scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
-        DotLog.i("worker: $mode run finished · $indexed indexed, $pending still pending")
+        val progressed = indexed + summarised > 0 || mode == MODE_NEW
+        if (progressed && toRead > 0) {
+            scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
+        } else if (progressed && toSummarise > 0) {
+            scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG, requireCharging = true)
+        }
+        DotLog.i(
+            "worker: $mode run finished · $indexed read, $summarised summarised" +
+                (if (power.isCharging) "" else " (summaries wait for the charger)") + " · $toRead to read, $toSummarise to summarise",
+        )
         return Result.success()
     }
 
@@ -87,10 +103,14 @@ class IndexScheduler(private val context: Context, private val backlogWhileCharg
         )
     }
 
-    fun scheduleBacklog(afterCurrent: Boolean = false) {
+    /**
+     * Older screenshots. Reading them follows the "only while charging" setting; when only
+     * summaries are left ([requireCharging]), the job always waits for the charger.
+     */
+    fun scheduleBacklog(afterCurrent: Boolean = false, requireCharging: Boolean = backlogWhileCharging()) {
         val constraints = Constraints.Builder()
             .setRequiresBatteryNotLow(true)
-            .setRequiresCharging(backlogWhileCharging())
+            .setRequiresCharging(requireCharging)
             .build()
         val request = OneTimeWorkRequestBuilder<IndexWorker>()
             .setConstraints(constraints)
