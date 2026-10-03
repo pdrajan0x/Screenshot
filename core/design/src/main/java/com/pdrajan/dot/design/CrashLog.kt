@@ -4,8 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import android.util.Log
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.pdrajan.dot.media.DotLog
 import java.io.File
 
 /**
@@ -30,20 +31,20 @@ import java.io.File
  */
 object CrashLog {
     private const val FILE = "last_crash.txt"
-    private const val TAG = "Dot"
 
     fun install(context: Context) {
         val app = context.applicationContext
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             runCatching { File(app.filesDir, FILE).writeText(report(app, thread.name, error)) }
+            DotLog.e("CRASH on thread ${thread.name}", error)
             previous?.uncaughtException(thread, error)
         }
     }
 
-    /** For background work that failed without crashing: logged, never shown. */
+    /** For background work that failed without crashing: kept in the diagnostics log. */
     fun warn(error: Throwable) {
-        Log.w(TAG, "Background work failed", error)
+        DotLog.e("Background work failed", error)
     }
 
     fun take(context: Context): String? {
@@ -92,5 +93,46 @@ fun CrashReportDialog() {
             }) { Text("Copy report") }
         },
         dismissButton = { TextButton(onClick = { report = null }) { Text("Close") } },
+    )
+}
+
+/** Shows the on-device diagnostics log with copy and save-to-Downloads actions. */
+@Composable
+fun DiagnosticsDialog(appName: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var log by remember { mutableStateOf(DotLog.read()) }
+    var saved by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Diagnostics") },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                Text(
+                    when (val where = saved) {
+                        null -> "What indexing did on this phone. Copy it or save it as a file and send it to whoever builds the app."
+                        "" -> "Couldn't save the file — use Copy log instead."
+                        else -> "Saved to $where — share that file from your Files app."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SelectionContainer {
+                    Text(log.takeLast(6_000).ifEmpty { "Nothing logged yet." }, style = MaterialTheme.typography.labelSmall)
+                }
+                Row {
+                    TextButton(onClick = {
+                        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+                        saved = DotLog.saveToDownloads(context, "$appName-log-$stamp.txt").orEmpty()
+                    }) { Text("Save file") }
+                    TextButton(onClick = { DotLog.clear(); log = "" }) { Text("Clear") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Diagnostics", log.takeLast(200_000)))
+            }) { Text("Copy log") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }

@@ -16,6 +16,8 @@ data class ScreenshotAnalysis(
     val entities: List<Entity>,
     val sourceApp: String?,
     val durationMs: Long,
+    /** OCR was skipped because Play services is still downloading the text model; read it later. */
+    val ocrPending: Boolean = false,
 )
 
 /** Full on-device pipeline for one image: decode → OCR → CLIP crops → categories → entities. */
@@ -31,12 +33,19 @@ class ScreenshotAnalyzer(
         val start = System.nanoTime()
         val bitmap = BitmapLoader.load(context.contentResolver, uri)
         try {
-            val text = if (runOcr) reader.read(bitmap) else ""
+            var ocrPending = false
+            val text = if (!runOcr) "" else try {
+                reader.read(bitmap)
+            } catch (e: Exception) {
+                if (!TextReader.isModelUnavailable(e)) throw e
+                ocrPending = true
+                ""
+            }
             val crops = clip.embedImage(bitmap, maxCrops)
             val app = resolveApp(displayName)
             val categories = classifier.classify(crops, text, app).categories
             val entities = extractor.extract(text)
-            return ScreenshotAnalysis(text, crops, categories, entities, app, (System.nanoTime() - start) / 1_000_000)
+            return ScreenshotAnalysis(text, crops, categories, entities, app, (System.nanoTime() - start) / 1_000_000, ocrPending)
         } finally {
             bitmap.recycle()
         }

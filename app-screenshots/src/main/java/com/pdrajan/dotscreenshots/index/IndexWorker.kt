@@ -9,6 +9,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dotscreenshots.DotScreenshotsApp
 import java.time.Duration
 
@@ -22,22 +23,29 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     override suspend fun doWork(): Result {
         val container = (applicationContext as DotScreenshotsApp).container
         val mode = inputData.getString(KEY_MODE) ?: MODE_NEW
+        DotLog.i("worker: $mode run started")
         val deadline = System.currentTimeMillis() + 8 * 60_000L
 
         runCatching { container.engine.sync() }
 
+        var indexed = 0
         if (mode == MODE_NEW) {
-            container.engine.process(limit = 30, deadline = deadline) { isStopped }
+            indexed = container.engine.process(limit = 30, deadline = deadline) { isStopped }
         } else {
             while (!isStopped && System.currentTimeMillis() < deadline) {
-                if (container.engine.process(limit = 50, deadline = deadline) { isStopped } == 0) break
+                val n = container.engine.process(limit = 50, deadline = deadline) { isStopped }
+                if (n == 0) break
+                indexed += n
             }
         }
 
         val pending = container.repo.counts().pending
         val scheduler = container.scheduler
         if (mode == MODE_NEW) scheduler.watchForNewScreenshots(afterCurrent = true)
-        if (pending > 0) scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
+        // Only chain another backlog run when this one got somewhere; a run that indexed nothing
+        // (a persistent error) waits for the next app open or screenshot instead of looping.
+        if (pending > 0 && (indexed > 0 || mode == MODE_NEW)) scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
+        DotLog.i("worker: $mode run finished · $indexed indexed, $pending still pending")
         return Result.success()
     }
 

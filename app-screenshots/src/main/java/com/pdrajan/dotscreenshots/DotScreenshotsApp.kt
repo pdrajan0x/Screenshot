@@ -18,6 +18,7 @@ import com.pdrajan.dotscreenshots.index.IndexEngine
 import com.pdrajan.dotscreenshots.index.IndexScheduler
 import com.pdrajan.dotscreenshots.index.ModelHub
 import com.pdrajan.dot.design.CrashLog
+import com.pdrajan.dot.media.DotLog
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +37,9 @@ class DotScreenshotsApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        DotLog.init(this)
         CrashLog.install(this)
+        DotLog.i("start: Dot Screenshots ${BuildConfig.VERSION_NAME} · Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) · ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
         container = AppContainer(this)
         container.scheduler.watchForNewScreenshots()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -77,10 +80,15 @@ class AppContainer(val context: Context) {
         foregroundJob?.cancel()
         foregroundJob = scope.launch {
             runCatching { engine.sync() }
-            engine.process(limit = FOREGROUND_BATCH)
+            // While the app is open, keep going batch after batch if the phone is charging
+            // (or the user allowed processing on battery); otherwise just the newest batch.
+            while (isActive && engine.process(limit = FOREGROUND_BATCH) > 0 && (isCharging() || !settings.backlogWhileCharging.value)) Unit
             if (repo.counts().pending > 0) scheduler.scheduleBacklog()
         }
     }
+
+    private fun isCharging(): Boolean =
+        runCatching { context.getSystemService(android.os.BatteryManager::class.java).isCharging }.getOrDefault(false)
 
     fun onBackground() {
         if (!_backlogRunning.value) foregroundJob?.cancel()

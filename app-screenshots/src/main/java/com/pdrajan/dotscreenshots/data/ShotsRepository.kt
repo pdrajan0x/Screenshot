@@ -139,6 +139,18 @@ class ShotsRepository(private val database: ShotsDatabase) {
         return IndexCounts(total, indexed, pending, failed)
     }
 
+    /** Screenshots indexed while the text model was still downloading. */
+    fun ocrPendingCount(): Int =
+        db.rawQuery("SELECT COUNT(*) FROM shots WHERE ocr_pending = 1", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    /** Queues those screenshots again now that text can be read. */
+    suspend fun requeueOcrPending(): Int = withContext(Dispatchers.IO) {
+        val n = db.compileStatement("UPDATE shots SET state = ${IndexState.PENDING.code}, ocr_pending = 0 WHERE ocr_pending = 1")
+            .use { it.executeUpdateDelete() }
+        if (n > 0) changed()
+        n
+    }
+
     suspend fun shotsByIds(ids: List<Long>): Map<Long, Shot> = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext emptyMap()
         ids.chunked(500).flatMap { chunk ->
@@ -305,6 +317,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 put("categories", if (analysis.categories.isEmpty()) "" else analysis.categories.joinToString(",", ",", ","))
                 put("entities", encodeEntities(analysis.entities))
                 put("index_version", ShotsDatabase.INDEX_VERSION)
+                put("ocr_pending", if (analysis.ocrPending) 1 else 0)
                 put("indexed_at", System.currentTimeMillis())
             }, "id = ?", arrayOf(id.toString()))
             rewriteFts(id)

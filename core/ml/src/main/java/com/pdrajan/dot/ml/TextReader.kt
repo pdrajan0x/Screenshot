@@ -47,6 +47,19 @@ class TextReader(val hindi: Boolean) : Closeable {
         return result.text
     }
 
+    /** Whether the text model is ready, checked with a tiny blank image (no UI, a few ms). */
+    fun isModelReady(): Boolean {
+        val probe = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        return try {
+            readOne(probe)
+            true
+        } catch (e: Exception) {
+            !isModelUnavailable(e)
+        } finally {
+            probe.recycle()
+        }
+    }
+
     override fun close() = recognizer.close()
 
     companion object {

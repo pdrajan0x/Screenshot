@@ -38,6 +38,8 @@ class GalleryAnalysis(
     val dHash: Long?,
     val sharpness: Double?,
     val faces: List<FaceResult>,
+    /** Text wasn't read because Play services is still downloading the text model. */
+    val ocrPending: Boolean = false,
 )
 
 class GalleryRepository(private val database: GalleryDatabase) {
@@ -326,6 +328,7 @@ class GalleryRepository(private val database: GalleryDatabase) {
                 if (a.dHash != null) put("dhash", a.dHash) else putNull("dhash")
                 if (a.sharpness != null) put("sharpness", a.sharpness) else putNull("sharpness")
                 put("index_version", GalleryDatabase.INDEX_VERSION)
+                put("ocr_pending", if (a.ocrPending) 1 else 0)
             }, "id = ?", arrayOf(id.toString()))
             db.delete("media_fts", "docid = ?", arrayOf(id.toString()))
             db.execSQL(
@@ -386,6 +389,17 @@ class GalleryRepository(private val database: GalleryDatabase) {
             "UPDATE people SET cover_face = ? WHERE id = ? AND (cover_face IS NULL OR (SELECT quality FROM faces WHERE id = cover_face) < ?)",
             arrayOf<Any>(faceId, personId, f.quality),
         )
+    }
+
+    /** Photos indexed while the text model was still downloading. */
+    fun ocrPendingCount(): Int =
+        db.rawQuery("SELECT COUNT(*) FROM media WHERE ocr_pending = 1", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    /** Queues those photos again now that text can be read. */
+    suspend fun requeueOcrPending(): Int = withContext(Dispatchers.IO) {
+        val n = db.compileStatement("UPDATE media SET state = $STATE_PENDING, ocr_pending = 0 WHERE ocr_pending = 1").use { it.executeUpdateDelete() }
+        if (n > 0) changed()
+        n
     }
 
     suspend fun markFailed(id: Long) = withContext(Dispatchers.IO) {

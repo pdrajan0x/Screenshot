@@ -20,6 +20,7 @@ import com.pdrajan.dotgallery.index.IndexScheduler
 import com.pdrajan.dotgallery.index.ModelHub
 import com.pdrajan.dotgallery.locked.LockedFolder
 import com.pdrajan.dot.design.CrashLog
+import com.pdrajan.dot.media.DotLog
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -38,7 +39,9 @@ class GalleryApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        DotLog.init(this)
         CrashLog.install(this)
+        DotLog.i("start: Dot Gallery ${BuildConfig.VERSION_NAME} · Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) · ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
         container = GalleryContainer(this)
         container.scheduler.watchForNewMedia()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -77,10 +80,15 @@ class GalleryContainer(val context: Context) {
         job?.cancel()
         job = scope.launch {
             runCatching { engine.sync() }
-            engine.process(limit = 80)
+            // While the app is open, keep going batch after batch if the phone is charging
+            // (or the user allowed processing on battery); otherwise just the newest batch.
+            while (isActive && engine.process(limit = 80) > 0 && (isCharging() || !settings.backlogWhileCharging.value)) Unit
             if (repo.counts().pending > 0) scheduler.scheduleBacklog()
         }
     }
+
+    private fun isCharging(): Boolean =
+        runCatching { context.getSystemService(android.os.BatteryManager::class.java).isCharging }.getOrDefault(false)
 
     fun onBackground() {
         if (!_processingAll.value) job?.cancel()

@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatterySaver
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Storage
@@ -40,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.pdrajan.dot.design.DiagnosticsDialog
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotLargeTitle
 import com.pdrajan.dot.design.SectionLabel
@@ -63,6 +65,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val counts by countsFlow.collectAsStateWithLifecycle(IndexCounts(0, 0, 0, 0))
     var confirmReindex by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
+    var diagnostics by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -141,6 +144,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                 icon = Icons.Rounded.Storage,
                 onClick = {},
             )
+            SettingsRow(
+                title = "Diagnostics",
+                subtitle = "See what indexing did, copy the log or save it to Downloads.",
+                icon = Icons.Rounded.BugReport,
+                onClick = { diagnostics = true },
+            )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             SectionLabel("About", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
@@ -153,6 +162,8 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(32.dp))
         }
     }
+
+    if (diagnostics) DiagnosticsDialog("DotScreenshots") { diagnostics = false }
 
     if (confirmReindex) {
         AlertDialog(

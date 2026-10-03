@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatterySaver
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PermMedia
 import androidx.compose.material.icons.rounded.PhotoLibrary
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.pdrajan.dot.design.DiagnosticsDialog
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotLargeTitle
 import com.pdrajan.dot.design.SectionLabel
@@ -76,6 +78,7 @@ fun SettingsScreen(nav: GalleryNav) {
     var canManage by remember { mutableStateOf(canManageMedia(ctx)) }
     var confirmRescan by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
+    var diagnostics by remember { mutableStateOf(false) }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         access = MediaPermissions.access(ctx)
@@ -196,6 +199,12 @@ fun SettingsScreen(nav: GalleryNav) {
                 icon = Icons.Rounded.Storage,
                 onClick = {},
             )
+            SettingsRow(
+                title = "Diagnostics",
+                subtitle = "See what indexing did, copy the log or save it to Downloads.",
+                icon = Icons.Rounded.BugReport,
+                onClick = { diagnostics = true },
+            )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             SectionLabel("About", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
@@ -208,6 +217,8 @@ fun SettingsScreen(nav: GalleryNav) {
             Spacer(Modifier.height(32.dp))
         }
     }
+
+    if (diagnostics) DiagnosticsDialog("DotGallery") { diagnostics = false }
 
     if (confirmRescan) {
         AlertDialog(

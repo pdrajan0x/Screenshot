@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.pdrajan.dot.design.DiagnosticsDialog
 import com.pdrajan.dot.design.DotEmptyState
 import com.pdrajan.dot.design.DotLargeTitle
 import com.pdrajan.dot.design.DotProgressStrip
@@ -35,7 +36,11 @@ fun PhotosScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
     val counts by remember { c.repo.observeCounts() }.collectAsStateWithLifecycle(IndexCounts(0, 0, 0))
     val progress by c.engine.progress.collectAsStateWithLifecycle()
     val processingAll by c.processingAll.collectAsStateWithLifecycle()
+    val lastError by c.engine.lastError.collectAsStateWithLifecycle()
     var selection by remember { mutableStateOf(emptySet<Long>()) }
+    var diagnostics by remember { mutableStateOf(false) }
+
+    if (diagnostics) DiagnosticsDialog("DotGallery") { diagnostics = false }
 
     SelectionScaffold(
         items = items,
@@ -61,7 +66,7 @@ fun PhotosScreen(nav: GalleryNav, bottomBar: @Composable () -> Unit) {
                     }
                 }
                 item(key = "status", span = { GridItemSpan(maxLineSpan) }) {
-                    IndexStatus(progress, counts, processingAll, c.hub.clipAvailable, c::processAllNow, c::stopProcessing)
+                    IndexStatus(progress, counts, processingAll, c.hub.clipAvailable, lastError, c::processAllNow, c::stopProcessing) { diagnostics = true }
                 }
             }
             if (items.isEmpty()) {
@@ -79,12 +84,15 @@ fun IndexStatus(
     counts: IndexCounts,
     processingAll: Boolean,
     modelAvailable: Boolean,
+    lastError: String?,
     onProcessAll: () -> Unit,
     onStop: () -> Unit,
+    onDetails: () -> Unit,
 ) {
     val m = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
     when {
         !modelAvailable -> Unit
+        progress.preparing -> DotProgressStrip("Preparing the AI model… the first time takes a minute", m)
         processingAll -> DotProgressStrip(
             "Organising your library · ${counts.indexed} of ${counts.total}",
             m,
@@ -95,6 +103,11 @@ fun IndexStatus(
             "Organising new photos · ${progress.done} of ${progress.total}",
             m,
             progress = if (progress.total > 0) progress.done.toFloat() / progress.total else null,
+        )
+        lastError != null -> DotProgressStrip(
+            "Couldn't organise photos · $lastError",
+            m,
+            action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
         )
         counts.pending > 0 -> DotProgressStrip(
             "${counts.pending} photos will be organised while charging",

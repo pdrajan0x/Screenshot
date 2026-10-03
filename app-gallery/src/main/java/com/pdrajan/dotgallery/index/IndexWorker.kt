@@ -9,6 +9,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dotgallery.GalleryApp
 import java.time.Duration
 
@@ -18,17 +19,25 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     override suspend fun doWork(): Result {
         val c = (applicationContext as GalleryApp).container
         val mode = inputData.getString(KEY_MODE) ?: MODE_NEW
+        DotLog.i("worker: $mode run started")
         val deadline = System.currentTimeMillis() + 8 * 60_000L
         runCatching { c.engine.sync() }
+        var indexed = 0
         if (mode == MODE_NEW) {
-            c.engine.process(limit = 40, deadline = deadline) { isStopped }
+            indexed = c.engine.process(limit = 40, deadline = deadline) { isStopped }
         } else {
             while (!isStopped && System.currentTimeMillis() < deadline) {
-                if (c.engine.process(limit = 50, deadline = deadline) { isStopped } == 0) break
+                val n = c.engine.process(limit = 50, deadline = deadline) { isStopped }
+                if (n == 0) break
+                indexed += n
             }
         }
         if (mode == MODE_NEW) c.scheduler.watchForNewMedia(afterCurrent = true)
-        if (c.repo.counts().pending > 0) c.scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
+        // Only chain another backlog run when this one got somewhere; a run that indexed nothing
+        // (a persistent error) waits for the next app open or new photo instead of looping.
+        val pending = c.repo.counts().pending
+        if (pending > 0 && (indexed > 0 || mode == MODE_NEW)) c.scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
+        DotLog.i("worker: $mode run finished · $indexed indexed, $pending still pending")
         return Result.success()
     }
 

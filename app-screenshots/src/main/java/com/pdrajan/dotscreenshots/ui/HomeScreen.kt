@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.pdrajan.dot.design.DiagnosticsDialog
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotEmptyState
 import com.pdrajan.dot.design.DotLargeTitle
@@ -93,6 +94,7 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
     val counts = c.repo.observeCounts().stateIn(viewModelScope, started, IndexCounts(0, 0, 0, 0))
     val favoriteCount = c.repo.observeFavorites().map { it.size }.stateIn(viewModelScope, started, 0)
     val progress: StateFlow<IndexProgress> = c.engine.progress
+    val lastError: StateFlow<String?> = c.engine.lastError
     val backlogRunning: StateFlow<Boolean> = c.backlogRunning
     val columns: StateFlow<Int> = c.settings.gridColumns
     val modelAvailable: Boolean get() = c.hub.available
@@ -162,6 +164,8 @@ fun HomeScreen(
     val counts by vm.counts.collectAsStateWithLifecycle()
     val favoriteCount by vm.favoriteCount.collectAsStateWithLifecycle()
     val progress by vm.progress.collectAsStateWithLifecycle()
+    val lastError by vm.lastError.collectAsStateWithLifecycle()
+    var diagnostics by remember { mutableStateOf(false) }
     val backlogRunning by vm.backlogRunning.collectAsStateWithLifecycle()
     val columns by vm.columns.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
@@ -170,6 +174,8 @@ fun HomeScreen(
     val deleter = rememberDeleteLauncher()
 
     BackHandler(enabled = selectionMode) { vm.clearSelection() }
+
+    if (diagnostics) DiagnosticsDialog("DotScreenshots") { diagnostics = false }
 
     if (showPicker) {
         CollectionPickerDialog(
@@ -218,7 +224,7 @@ fun HomeScreen(
                     DotSearchPill("Search your screenshots", onClick = onSearch, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                 }
                 fullSpan("status") {
-                    StatusStrip(progress, counts, backlogRunning, vm.modelAvailable, vm::processAll, vm::stopProcessing)
+                    StatusStrip(progress, counts, backlogRunning, vm.modelAvailable, lastError, vm::processAll, vm::stopProcessing) { diagnostics = true }
                 }
                 if (collections.isNotEmpty() || favoriteCount > 0) {
                     fullSpan("collections") {
@@ -286,12 +292,15 @@ private fun StatusStrip(
     counts: IndexCounts,
     backlogRunning: Boolean,
     modelAvailable: Boolean,
+    lastError: String?,
     onProcessAll: () -> Unit,
     onStop: () -> Unit,
+    onDetails: () -> Unit,
 ) {
     val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
     when {
         !modelAvailable -> DotProgressStrip("This build has no AI model; only basic listing works.", modifier)
+        progress.preparing -> DotProgressStrip("Preparing the AI model… the first time takes a minute", modifier)
         backlogRunning -> DotProgressStrip(
             text = "Processing all · ${counts.indexed} of ${counts.total}",
             modifier = modifier,
@@ -302,6 +311,11 @@ private fun StatusStrip(
             text = "Reading new screenshots · ${progress.done} of ${progress.total}",
             modifier = modifier,
             progress = if (progress.total > 0) progress.done.toFloat() / progress.total else null,
+        )
+        lastError != null -> DotProgressStrip(
+            text = "Couldn't read screenshots · $lastError",
+            modifier = modifier,
+            action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
         )
         counts.pending > 0 -> DotProgressStrip(
             text = "${counts.pending} older screenshots will be processed while charging",

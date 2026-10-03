@@ -30,5 +30,6 @@ dependencies {
     api(libs.compose.material.icons.extended)
     api(libs.compose.ui.tooling.preview)
     api(libs.coil.compose)
+    implementation(project(":core:media"))
     debugImplementation(libs.compose.ui.tooling)
 }

@@ -40,7 +40,8 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, 
                 ocr_text TEXT,
                 dhash INTEGER,
                 sharpness REAL,
-                index_version INTEGER NOT NULL DEFAULT 0
+                index_version INTEGER NOT NULL DEFAULT 0,
+                ocr_pending INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
         )
@@ -104,11 +105,13 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, 
         db.execSQL("CREATE TABLE recent_searches(query TEXT PRIMARY KEY, at INTEGER NOT NULL)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE media ADD COLUMN ocr_pending INTEGER NOT NULL DEFAULT 0")
+    }
 
     companion object {
         const val NAME = "gallery.db"
-        const val VERSION = 1
+        const val VERSION = 2
         const val INDEX_VERSION = 1
     }
 }

@@ -25,5 +25,5 @@ tasks.test {
     // Shared with the Android modules: the BPE vocabulary ships as an app asset.
     systemProperty("clip.vocab", file("../ml/src/main/assets/clip/bpe_simple_vocab_16e6.txt.gz").absolutePath)
     // Produced by tools/model/export_mobileclip.py. Model parity tests are skipped when absent.
-    systemProperty("clip.modelOut", file("../../model-out").absolutePath)
+    systemProperty("clip.modelOut", System.getenv("CLIP_MODEL_OUT") ?: file("../../model-out").absolutePath)
 }

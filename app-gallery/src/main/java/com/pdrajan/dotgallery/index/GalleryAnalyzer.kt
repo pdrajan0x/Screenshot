@@ -35,13 +35,21 @@ class GalleryAnalyzer(
             val tags = tagger.tags(crops)
             val isScreenshot = item.path?.contains("Screenshot", ignoreCase = true) == true
             val wantsText = !item.isVideo && reader != null && (isScreenshot || tags.any { it in PhotoTags.TEXT_HEAVY })
+            var ocrPending = false
+            val text = if (!wantsText) "" else try {
+                reader!!.read(bitmap)
+            } catch (e: Exception) {
+                ocrPending = TextReader.isModelUnavailable(e)
+                ""
+            }
             return GalleryAnalysis(
                 cropEmbeddings = crops,
                 tags = if (isScreenshot && "screenshot" !in tags) tags + "screenshot" else tags,
-                ocrText = if (wantsText) runCatching { reader!!.read(bitmap) }.getOrDefault("") else "",
+                ocrText = text,
                 dHash = dHash(bitmap),
                 sharpness = if (item.isVideo) null else sharpness(bitmap),
                 faces = faces?.takeIf { !item.isVideo }?.let { engine -> runCatching { engine.analyze(bitmap, item.id, thumbDir) }.getOrDefault(emptyList()) }.orEmpty(),
+                ocrPending = ocrPending,
             )
         } finally {
             bitmap.recycle()

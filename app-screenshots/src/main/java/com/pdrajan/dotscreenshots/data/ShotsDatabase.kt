@@ -35,6 +35,7 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
                 note TEXT,
                 favorite INTEGER NOT NULL DEFAULT 0,
                 index_version INTEGER NOT NULL DEFAULT 0,
+                ocr_pending INTEGER NOT NULL DEFAULT 0,
                 indexed_at INTEGER
             )
             """.trimIndent(),
@@ -54,11 +55,13 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
         db.execSQL("CREATE TABLE recent_searches(query TEXT PRIMARY KEY, at INTEGER NOT NULL)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE shots ADD COLUMN ocr_pending INTEGER NOT NULL DEFAULT 0")
+    }
 
     companion object {
         const val NAME = "shots.db"
-        const val VERSION = 1
+        const val VERSION = 2
 
         /**
          * Bump when the analysis pipeline changes in a way that makes old results stale
