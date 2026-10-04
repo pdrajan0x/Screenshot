@@ -35,6 +35,11 @@ class Settings(context: Context) {
     private val _gridColumns = MutableStateFlow(prefs.getInt(KEY_COLUMNS, 3))
     val gridColumns: StateFlow<Int> = _gridColumns.asStateFlow()
 
+    /** Whether Android's background prompt was shown already (it's asked for once, on first launch). */
+    var backgroundAsked: Boolean
+        get() = prefs.getBoolean(KEY_BACKGROUND_ASKED, false)
+        set(value) = prefs.edit { putBoolean(KEY_BACKGROUND_ASKED, value) }
+
     /** Running average of per-screenshot analysis time, for the settings screen. */
     var avgIndexMillis: Long
         get() = prefs.getLong(KEY_AVG_MS, 0)
@@ -83,5 +88,6 @@ class Settings(context: Context) {
         const val KEY_AVG_MS = "avg_index_ms"
         const val KEY_DESCRIPTIONS = "show_descriptions"
         const val KEY_MODEL_MOBILE = "model_over_mobile"
+        const val KEY_BACKGROUND_ASKED = "background_asked"
     }
 }

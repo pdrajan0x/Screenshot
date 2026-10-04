@@ -247,6 +247,8 @@ def main():
     adb("install", "-r", APK, check=True, timeout=600)
     for perm in ["READ_MEDIA_IMAGES", "ACCESS_MEDIA_LOCATION", "POST_NOTIFICATIONS"]:
         sh(f"pm grant {PKG} android.permission.{perm}")
+    # Already allowed to run in the background, so the app's first-launch prompt doesn't cover the shots.
+    sh(f"dumpsys deviceidle whitelist +{PKG}")
     adb("logcat", "-c")
     launch()
     wait(10)

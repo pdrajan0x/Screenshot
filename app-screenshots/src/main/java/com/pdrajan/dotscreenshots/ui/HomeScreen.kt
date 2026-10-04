@@ -195,6 +195,8 @@ fun HomeScreen(
     val deleter = rememberDeleteLauncher()
 
     BackHandler(enabled = selectionMode) { vm.clearSelection() }
+    // On first launch: Android's one-tap prompt to keep reading screenshots after the app closes.
+    AskForBackgroundOnce()
 
     if (showPicker) {
         CollectionPickerDialog(

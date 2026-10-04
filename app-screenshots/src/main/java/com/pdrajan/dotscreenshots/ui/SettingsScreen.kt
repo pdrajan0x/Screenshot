@@ -1,9 +1,5 @@
 package com.pdrajan.dotscreenshots.ui
 
-import android.content.Intent
-import android.net.Uri
-import android.os.PowerManager
-import android.provider.Settings
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
@@ -182,10 +178,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
                 SettingsDivider()
                 // Exempt from battery optimisation, Android lets the background run keep going (see IndexWorker).
-                val power = remember { ctx.getSystemService(PowerManager::class.java) }
-                var unrestricted by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(ctx.packageName)) }
+                var unrestricted by remember { mutableStateOf(BackgroundAccess.granted(ctx)) }
                 LifecycleResumeEffect(Unit) {
-                    unrestricted = power.isIgnoringBatteryOptimizations(ctx.packageName)
+                    unrestricted = BackgroundAccess.granted(ctx)
                     onPauseOrDispose {}
                 }
                 SettingsRow(
@@ -193,11 +188,15 @@ fun SettingsScreen(onBack: () -> Unit) {
                     subtitle = if (unrestricted) {
                         "Android won't pause Dot Screenshots while it works. Some phones (Xiaomi, Realme, Vivo…) also need auto-start turned on."
                     } else {
-                        "In App info → Battery, choose “Unrestricted”; otherwise Android pauses the work soon after you leave."
+                        "Tap to allow. Otherwise Android pauses the work soon after you leave."
                     },
                     icon = Icons.Rounded.BatterySaver,
-                    // App info → Battery → "Unrestricted" (asking for it directly needs a permission Play Protect frowns on).
-                    onClick = { ctx.startSafely(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", ctx.packageName, null))) },
+                    // Not allowed yet: Android's one-tap prompt (App info where the phone has none). Allowed: App info.
+                    onClick = {
+                        if (unrestricted || runCatching { ctx.startActivity(BackgroundAccess.prompt(ctx)) }.isFailure) {
+                            ctx.startSafely(BackgroundAccess.appInfo(ctx))
+                        }
+                    },
                 )
             }
 

@@ -15,6 +15,10 @@
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <!-- Only to download the description model once (see ModelDownload). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- On first launch, Android's one-tap "let it run in the background" prompt (see BackgroundAccess). -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
     <!-- A long background run shows a quiet notification so Android lets it finish. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
