@@ -151,6 +151,9 @@ class ShotListViewModel(private val c: AppContainer, val ctx: String) : ViewMode
     fun rememberOrder() {
         c.viewerOrder = shots.value.map { it.id }
     }
+
+    /** The screenshot the viewer was on when it closed (once). */
+    fun takeReturning(): Long? = c.viewerAt.also { c.viewerAt = null }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -175,6 +178,19 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
     var picker by remember { mutableStateOf(false) }
 
     BackHandler(enabled = selectionMode) { vm.clear() }
+
+    // Back from the viewer on a screenshot scrolled out of sight: bring it into view (see HomeScreen).
+    val returningTo = remember { vm.takeReturning() }
+    if (returningTo != null) {
+        remember(returningTo) {
+            val target = shots.indexOfFirst { it.id == returningTo }.takeIf { it >= 0 }?.plus(1)
+            val first = gridState.firstVisibleItemIndex
+            if (target != null && (target < first || target > first + columns * 4)) {
+                gridState.requestScrollToItem((target - columns).coerceAtLeast(0))
+            }
+            true
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,

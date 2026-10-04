@@ -161,6 +161,9 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
     fun rememberOrder() {
         c.viewerOrder = shots.value.map { it.id }
     }
+
+    /** The screenshot the viewer was on when it closed (once). */
+    fun takeReturning(): Long? = c.viewerAt.also { c.viewerAt = null }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -232,6 +235,22 @@ fun HomeScreen(
         val marks = remember(days, headerCount, shots.isEmpty()) {
             var index = headerCount + if (shots.isEmpty()) 1 else 0
             days.map { (_, list) -> ScrubMark(index, list.first().takenAt).also { index += 1 + list.size } }
+        }
+        // Back from the viewer on a screenshot that's scrolled out of sight: bring it into view
+        // before the first frame, so it can shrink back into its place instead of just fading.
+        val returningTo = remember { vm.takeReturning() }
+        if (returningTo != null) {
+            remember(returningTo) {
+                var index = headerCount
+                val target = days.firstNotNullOfOrNull { (_, list) ->
+                    list.indexOfFirst { it.id == returningTo }.takeIf { it >= 0 }?.let { index + 1 + it }.also { index += 1 + list.size }
+                }
+                val first = gridState.firstVisibleItemIndex
+                if (target != null && (target < first || target > first + columns * 4)) {
+                    gridState.requestScrollToItem((target - columns).coerceAtLeast(0))
+                }
+                true
+            }
         }
         Box(Modifier.fillMaxSize()) {
         LazyVerticalGrid(

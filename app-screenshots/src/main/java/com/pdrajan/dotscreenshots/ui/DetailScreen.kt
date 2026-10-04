@@ -133,6 +133,7 @@ import androidx.compose.animation.slideOutVertically
 import com.pdrajan.dot.design.MediaThumbs
 import androidx.compose.animation.core.tween
 import com.pdrajan.dot.design.glass
+import com.pdrajan.dot.design.screenSettled
 import com.pdrajan.dot.design.sharedImage
 import coil3.request.ImageRequest
 import com.pdrajan.dot.design.glassSource
@@ -180,6 +181,7 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
 
     fun select(id: Long) {
         current.value = id
+        c.viewerAt = id
     }
 
     /** Each page shows its own screenshot's details. */
@@ -227,6 +229,12 @@ fun DetailScreen(
     val deleter = rememberDeleteLauncher()
     // The screenshot (and its details) blur behind the top and bottom controls so they stay readable.
     val glass = rememberGlass()
+    // While the picture flies in it has the phone to itself: the bars, the details and the
+    // neighbouring pictures wait until it has landed. Once built they stay (tearing them down
+    // would cost the closing animation its first frames); only the bars leave as it closes.
+    val settled = screenSettled()
+    var landed by remember { mutableStateOf(false) }
+    LaunchedEffect(settled) { if (settled) landed = true }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         val list = ids
@@ -243,7 +251,7 @@ fun DetailScreen(
                 HorizontalPager(
                     state = pager,
                     key = { list.getOrElse(it) { -1L } },
-                    beyondViewportPageCount = 1,
+                    beyondViewportPageCount = if (landed) 1 else 0,
                     modifier = Modifier.fillMaxSize().glassSource(glass),
                 ) { page ->
                     val id = list.getOrNull(page) ?: return@HorizontalPager
@@ -251,6 +259,7 @@ fun DetailScreen(
                         id = id,
                         vm = vm,
                         isCurrent = page == pager.currentPage,
+                        landed = landed,
                         request = pageRequest,
                         onToggleChrome = { chrome = !chrome },
                         onDetailsShown = { detailsShown = it },
@@ -263,7 +272,7 @@ fun DetailScreen(
 
         // The bars glide a little as they fade, the way Photos does when you tap the picture.
         AnimatedVisibility(
-            visible = chrome,
+            visible = chrome && settled,
             enter = fadeIn(tween(220)) + slideInVertically(tween(260, easing = EmphasizedDecelerate)) { -it / 3 },
             exit = fadeOut(tween(160)) + slideOutVertically(tween(200, easing = EmphasizedAccelerate)) { -it / 3 },
             modifier = Modifier.align(Alignment.TopCenter),
@@ -303,7 +312,7 @@ fun DetailScreen(
         }
 
         AnimatedVisibility(
-            visible = chrome && !detailsShown,
+            visible = chrome && !detailsShown && settled,
             enter = fadeIn(tween(220)) + slideInVertically(tween(260, easing = EmphasizedDecelerate)) { it / 3 },
             exit = fadeOut(tween(160)) + slideOutVertically(tween(200, easing = EmphasizedAccelerate)) { it / 3 },
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -373,6 +382,7 @@ private fun ShotPage(
     id: Long,
     vm: DetailViewModel,
     isCurrent: Boolean,
+    landed: Boolean,
     request: PageRequest?,
     onToggleChrome: () -> Unit,
     onDetailsShown: (Boolean) -> Unit,
@@ -381,6 +391,10 @@ private fun ShotPage(
 ) {
     val detail by remember(id) { vm.detailOf(id) }.collectAsStateWithLifecycle(null)
     val scroll = rememberScrollState()
+    // The details below the picture are built once it has landed (and only for the page in view):
+    // building them during the opening animation is what made it stutter.
+    var sheetReady by remember(id) { mutableStateOf(false) }
+    LaunchedEffect(isCurrent, landed) { if (isCurrent && landed) sheetReady = true }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val viewport = maxHeight
         val viewportPx = with(LocalDensity.current) { viewport.toPx() }
@@ -414,7 +428,7 @@ private fun ShotPage(
                 modifier = Modifier.fillMaxWidth().heightIn(min = viewport * 0.6f),
             ) {
                 val d = detail
-                if (d != null) {
+                if (d != null && sheetReady) {
                     DetailSheet(d, vm, onOpenCollection = onOpenCollection, onSearch = onSearch)
                 } else {
                     Spacer(Modifier.fillMaxWidth().height(160.dp))

@@ -1,0 +1,5 @@
+# Compile all of the app's own code ahead of time when it's installed (ProfileInstaller applies
+# it on sideloaded installs too), so screens and transitions run smoothly from the first launch
+# instead of after days of just-in-time compiling. Compose and AndroidX bring their own profiles.
+HSPLcom/pdrajan/**->**(**)**
+Lcom/pdrajan/**;

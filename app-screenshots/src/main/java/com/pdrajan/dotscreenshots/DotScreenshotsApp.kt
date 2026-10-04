@@ -95,6 +95,9 @@ class AppContainer(val context: Context) {
     /** The grid's order when a screenshot was opened from it: the viewer swipes through it from its first frame. */
     @Volatile var viewerOrder: List<Long> = emptyList()
 
+    /** The screenshot the viewer shows (or last showed): the grid brings it into view on the way back. */
+    @Volatile var viewerAt: Long? = null
+
     private val _backlogRunning = MutableStateFlow(false)
     /** True while the user asked to process everything now (not just the newest batch). */
     val backlogRunning: StateFlow<Boolean> = _backlogRunning.asStateFlow()
