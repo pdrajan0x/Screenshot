@@ -136,17 +136,19 @@ def fill_library():
     wait(2)
 
 
-def wait_until_read(max_minutes=20):
-    """Settings shows "N of N screenshots searchable" once everything is read."""
+def wait_until_read(max_minutes=40):
+    """Settings shows "N of N screenshots searchable" and no "… left" once everything is read and described."""
     tap("Settings", exact=True)
     wait(2)
     deadline = time.time() + max_minutes * 60
     while time.time() < deadline:
-        for n in ui_nodes():
-            m = re.search(r"(\d+) of (\d+) screenshots searchable", n.get("text") or "")
+        texts = [n.get("text") or "" for n in ui_nodes()]
+        busy = [t for t in texts if " left" in t or "waiting" in t]
+        for t in texts:
+            m = re.search(r"(\d+) of (\d+) screenshots searchable", t)
             if m:
-                print("status:", m.group(0))
-                if m.group(1) == m.group(2) and int(m.group(2)) > 0:
+                print("status:", m.group(0), "|", busy[0] if busy else "done", flush=True)
+                if m.group(1) == m.group(2) and int(m.group(2)) > 0 and not busy:
                     return True
         tap("Do it now", exact=True, required=False)
         wait(20)

@@ -1,17 +1,17 @@
 name: README screenshots
 
-# Run by hand after a release: installs the Latest APK on an emulator and captures the app's
-# main screens (tools/screenshots/take.py) for docs/screenshots.
+# Run by hand after a release: installs the Latest APK on an emulator, captures the app's main
+# screens (tools/screenshots/take.py) and commits them to docs/screenshots for the README.
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   screenshots:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -44,3 +44,14 @@ jobs:
         with:
           name: readme-screenshots
           path: docs/screenshots
+
+      - name: Commit the screenshots
+        run: |
+          rm -f docs/screenshots/debug-*.png
+          git config user.name "pdrajan0x"
+          git config user.email "itspdrajan@gmail.com"
+          git add docs/screenshots
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "README: app screenshots"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
