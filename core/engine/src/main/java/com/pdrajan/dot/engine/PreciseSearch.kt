@@ -7,7 +7,8 @@ package com.pdrajan.dot.engine
  *   stands for ("motorcycle" finds photos tagged bike). Filler words ("show my photos of…") are
  *   dropped first.
  * - Where it matches decides how much it counts: a picture keyword, the app, a heading or the
- *   user's note ([SearchDoc.strong]) far more than a word somewhere in the screen text.
+ *   user's note ([SearchDoc.strong]) most, then the description ([SearchDoc.described]), then a
+ *   word somewhere in the screen text.
  * - Results close to the best one come first; the rest are kept apart as weaker matches.
  */
 object PreciseSearch {
@@ -16,7 +17,7 @@ object PreciseSearch {
     data class Term(val word: String, val alternatives: List<String>)
 
     /** Candidate text, split by how much a match there counts. */
-    class SearchDoc(val id: Long, val strong: String, val body: String, val takenAt: Long = 0L)
+    class SearchDoc(val id: Long, val strong: String, val body: String, val takenAt: Long = 0L, val described: String = "")
 
     data class Ranked(val best: List<Long>, val more: List<Long>) {
         val isEmpty: Boolean get() = best.isEmpty() && more.isEmpty()
@@ -53,16 +54,17 @@ object PreciseSearch {
         val phrase = if (terms.size >= 2) terms.joinToString(" ") { it.word } else null
         val scored = docs.mapNotNull { d ->
             val strong = normalize(d.strong)
+            val described = normalize(d.described)
             val body = normalize(d.body)
             var score = 0f
             for (t in terms) {
-                val s = t.alternatives.maxOf { a -> if (has(strong, a)) STRONG else 0f }
+                val s = t.alternatives.maxOf { a -> if (has(strong, a)) STRONG else if (has(described, a)) DESCRIBED else 0f }
                 val b = t.alternatives.maxOf { a -> count(body, a) }
                 val termScore = maxOf(s, if (b > 0) BODY + REPEAT * (minOf(b, 4) - 1) else 0f)
                 if (termScore == 0f) return@mapNotNull null
                 score += termScore
             }
-            if (phrase != null && (has(strong, phrase) || has(body, phrase))) score += PHRASE
+            if (phrase != null && (has(strong, phrase) || has(described, phrase) || has(body, phrase))) score += PHRASE
             d to score
         }
         if (scored.isEmpty()) return Ranked(emptyList(), emptyList())
@@ -73,6 +75,7 @@ object PreciseSearch {
     }
 
     private const val STRONG = 3f
+    private const val DESCRIBED = 2f
     private const val BODY = 1f
     private const val REPEAT = 0.2f
     private const val PHRASE = 1.5f

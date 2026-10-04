@@ -61,7 +61,6 @@ import com.pdrajan.dot.engine.FtsQuery
 import com.pdrajan.dot.engine.DateQueryParser
 import com.pdrajan.dot.engine.MatchReason
 import com.pdrajan.dot.engine.Snippet
-import com.pdrajan.dot.engine.VectorHit
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.SearchHit
 import com.pdrajan.dotscreenshots.data.Shot
@@ -88,7 +87,6 @@ data class SearchUi(
     /** Weaker matches (the words only somewhere in the screen text), shown on request. */
     val more: List<SearchHit> = emptyList(),
     val searching: Boolean = false,
-    val visualPending: Boolean = false,
     /** For a date in the query ("last week"): the range it means. */
     val dateLabel: String? = null,
 )
@@ -138,8 +136,8 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
 
     /**
      * Precise first: a category asked for by name, then screenshots whose app, headings, picture
-     * keywords or note have every word; weaker text matches are kept apart. Look-alike matching
-     * (CLIP) only runs when no words match at all, and keeps just the closest few.
+     * keywords, objects, note or description have every word; matches only in the screen text are
+     * kept apart. Nothing is guessed from looks: every result contains the words.
      */
     private suspend fun run(q: String) {
         _ui.value = _ui.value.copy(searching = true)
@@ -149,28 +147,20 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
         fun inRange(shot: Shot) = range == null || shot.takenAt in range.startMillis until range.endMillis
         if (rest.isBlank()) {
             val ids = range?.let { c.repo.idsTakenBetween(it.startMillis, it.endMillis) }.orEmpty()
-            publish(q, ids.map { it to setOf(MatchReason.TEXT) }, emptyList(), visualPending = false, range?.label, ::inRange)
+            publish(q, ids.map { it to setOf(MatchReason.TEXT) }, emptyList(), range?.label, ::inRange)
             return
         }
         val categoryIds = Categories.matchQuery(rest).flatMap { c.repo.categoryShots(it) }.distinct()
         val text = c.repo.textSearch(rest, c.hub.words)
         val best = categoryIds.map { it to setOf(MatchReason.CATEGORY) } + text.best.filter { it !in categoryIds }.map { it to setOf(MatchReason.TEXT) }
         val more = text.more.filter { it !in categoryIds }.map { it to setOf(MatchReason.TEXT) }
-        val tryVisual = best.isEmpty() && more.isEmpty() && c.hub.available
-        publish(q, best, more, visualPending = tryVisual, range?.label, ::inRange)
-        if (!tryVisual) return
-        val visual: List<VectorHit> = runCatching {
-            val clip = c.hub.clip() ?: return@runCatching emptyList()
-            c.repo.visualSearch(rest, clip)
-        }.getOrDefault(emptyList())
-        publish(q, visual.map { it.id to setOf(MatchReason.VISUAL) }, emptyList(), visualPending = false, range?.label, ::inRange)
+        publish(q, best, more, range?.label, ::inRange)
     }
 
     private suspend fun publish(
         q: String,
         best: List<Pair<Long, Set<MatchReason>>>,
         more: List<Pair<Long, Set<MatchReason>>>,
-        visualPending: Boolean,
         dateLabel: String?,
         keep: (Shot) -> Boolean,
     ) {
@@ -186,7 +176,7 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
         val weak = hits(more)
         c.lastSearchIds = (strong + weak).map { it.shot.id }
         if (_ui.value.query == q) {
-            _ui.value = _ui.value.copy(hits = strong, more = weak, searching = false, visualPending = visualPending, dateLabel = dateLabel)
+            _ui.value = _ui.value.copy(hits = strong, more = weak, searching = false, dateLabel = dateLabel)
         }
     }
 }
@@ -282,9 +272,9 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
                         )
-                        if (ui.searching || ui.visualPending) DotLoader()
+                        if (ui.searching) DotLoader()
                     }
-                    if (!ui.searching && !ui.visualPending && ui.hits.isEmpty() && ui.more.isEmpty()) {
+                    if (!ui.searching && ui.hits.isEmpty() && ui.more.isEmpty()) {
                         DotEmptyState(
                             title = "Nothing found",
                             message = "Try other words, or describe what's in the picture — like \"red car\" or \"movie poster\".",

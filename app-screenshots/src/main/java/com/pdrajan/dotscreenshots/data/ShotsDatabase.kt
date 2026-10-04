@@ -43,7 +43,10 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
                 headline TEXT,
                 keywords TEXT NOT NULL DEFAULT '',
                 words_version INTEGER NOT NULL DEFAULT 0,
-                clip_version INTEGER NOT NULL DEFAULT 0
+                clip_version INTEGER NOT NULL DEFAULT 0,
+                description TEXT,
+                objects TEXT NOT NULL DEFAULT '',
+                describe_version INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
         )
@@ -67,7 +70,7 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
         if (oldVersion < 3) {
             listOf("app_source TEXT", "app_package TEXT", "page_url TEXT", "title TEXT", "summary TEXT", "tags TEXT",
                 "summary_state INTEGER NOT NULL DEFAULT 0").forEach { db.execSQL("ALTER TABLE shots ADD COLUMN $it") }
-            // (The search index is rebuilt by step 6, with the columns it has now.)
+            // (The search index is rebuilt by step 8, with the columns it has by then.)
         }
         // How sure a guessed source app is (null when it is certain).
         if (oldVersion < 4) db.execSQL("ALTER TABLE shots ADD COLUMN app_confidence REAL")
@@ -86,12 +89,19 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
             db.execSQL("ALTER TABLE shots ADD COLUMN words_version INTEGER NOT NULL DEFAULT 0")
             db.execSQL("UPDATE shots SET title = NULL, summary = NULL, tags = NULL")
             db.execSQL("UPDATE shots SET app = NULL, app_package = NULL, app_source = NULL WHERE app_source IN ('model', 'guess', 'visual')")
+            // (Step 8 rebuilds the search index, once every column it reads exists.)
+        }
+        // Which image model made a row's embeddings: older ones are read again with the current one.
+        if (oldVersion < 7) db.execSQL("ALTER TABLE shots ADD COLUMN clip_version INTEGER NOT NULL DEFAULT 0")
+        if (oldVersion < 8) {
+            // Florence-2 descriptions and the objects it sees, searchable; every screenshot gets one in the background.
+            db.execSQL("ALTER TABLE shots ADD COLUMN description TEXT")
+            db.execSQL("ALTER TABLE shots ADD COLUMN objects TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE shots ADD COLUMN describe_version INTEGER NOT NULL DEFAULT 0")
             db.execSQL("DROP TABLE IF EXISTS shots_fts")
             createFts(db)
             db.execSQL("INSERT INTO shots_fts(docid, $FTS_COLUMNS) SELECT id, $FTS_SOURCE FROM shots")
         }
-        // Which image model made a row's embeddings: older ones are read again with the current one.
-        if (oldVersion < 7) db.execSQL("ALTER TABLE shots ADD COLUMN clip_version INTEGER NOT NULL DEFAULT 0")
     }
 
     private fun createFts(db: SQLiteDatabase) {
@@ -100,12 +110,13 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
 
     companion object {
         const val NAME = "shots.db"
-        const val VERSION = 7
+        const val VERSION = 8
 
         /** Full-text columns, and the shots expressions that fill them (same order). */
-        const val FTS_COLUMNS = "ocr_text, note, app, headline, keywords"
+        const val FTS_COLUMNS = "ocr_text, note, app, headline, keywords, description"
         const val FTS_SOURCE =
-            "COALESCE(ocr_text,''), COALESCE(note,''), COALESCE(app,''), COALESCE(headline,''), REPLACE(keywords, ',', ' ')"
+            "COALESCE(ocr_text,''), COALESCE(note,''), COALESCE(app,''), COALESCE(headline,''), REPLACE(keywords || objects, ',', ' '), " +
+                "COALESCE(description,'')"
 
         /**
          * Bump when the analysis pipeline changes in a way that makes old results stale
@@ -121,5 +132,8 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
          * made by an older one are kept out of picture search until their picture is read again.
          */
         const val CLIP_VERSION = 2
+
+        /** The description model behind stored descriptions (1 = Florence-2-base); older rows are described again. */
+        const val DESCRIBE_VERSION = 1
     }
 }

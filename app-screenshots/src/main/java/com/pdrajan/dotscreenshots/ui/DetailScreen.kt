@@ -124,6 +124,7 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.LocationOff
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Tag
+import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -471,6 +472,14 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
         }
         Spacer(Modifier.height(8.dp))
 
+        SheetSection("Description") {
+            when {
+                d.description != null -> Text(d.description, style = MaterialTheme.typography.bodyLarge)
+                d.shot.state == IndexState.FAILED -> Text("Couldn't be read.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else -> Text("Not described yet — it'll be done soon.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
         SheetSection("Details") { FileDetailsList(d) }
 
         // Keywords stay tucked away until asked for.
@@ -536,20 +545,34 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
             }
         }
 
+        // The words read from the screen: hidden until asked for, shown as one running line.
+        var showText by rememberSaveable(d.shot.id) { mutableStateOf(false) }
+        val screenText = remember(d.text) { d.text.replace(Regex("\\s*\\n\\s*"), " ").trim() }
         SheetSection("Text in screenshot") {
-            when {
-                d.text.isNotBlank() -> Column {
-                    SelectionContainer {
-                        Text(d.text, style = MaterialTheme.typography.bodyMedium)
-                    }
-                    TextButton(onClick = { ctx.copy("Screenshot text", d.text) }) {
-                        Icon(Icons.Rounded.ContentCopy, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Copy all text")
+            Column {
+                DotOutlinedButton(
+                    if (showText) "Hide text" else "Show text",
+                    onClick = { showText = !showText },
+                    icon = Icons.Rounded.TextFields,
+                )
+                AnimatedVisibility(showText) {
+                    Column(Modifier.padding(top = 12.dp)) {
+                        when {
+                            screenText.isNotEmpty() -> {
+                                SelectionContainer {
+                                    Text(screenText, style = MaterialTheme.typography.bodyMedium)
+                                }
+                                TextButton(onClick = { ctx.copy("Screenshot text", screenText) }) {
+                                    Icon(Icons.Rounded.ContentCopy, null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Copy all text")
+                                }
+                            }
+                            d.shot.state == IndexState.PENDING -> Text("Not read yet — it'll be processed soon.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else -> Text("No text found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
-                d.shot.state == IndexState.PENDING -> Text("Not read yet — it'll be processed soon.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else -> Text("No text found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 

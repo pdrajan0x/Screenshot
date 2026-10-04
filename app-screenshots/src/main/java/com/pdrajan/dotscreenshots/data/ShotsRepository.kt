@@ -11,15 +11,12 @@ import com.pdrajan.dot.engine.Browsers
 import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.engine.FtsQuery
 import com.pdrajan.dot.engine.PageLink
-import com.pdrajan.dot.engine.HybridRanker
 import com.pdrajan.dot.engine.PictureWords
 import com.pdrajan.dot.engine.PreciseSearch
 import com.pdrajan.dot.engine.QuantizedVector
-import com.pdrajan.dot.engine.VectorHit
 import com.pdrajan.dot.engine.VectorIndex
 import com.pdrajan.dot.engine.VectorMath
 import com.pdrajan.dot.media.MediaItem
-import com.pdrajan.dot.ml.ClipModel
 import com.pdrajan.dot.ml.ScreenshotAnalysis
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -105,7 +102,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
 
     private fun detail(id: Long): ShotDetail? {
         val row = db.rawQuery(
-            "SELECT $SHOT_COLUMNS, ocr_text, entities, note, keywords, page_url, app_source FROM shots WHERE id = ?",
+            "SELECT $SHOT_COLUMNS, ocr_text, entities, note, keywords, page_url, app_source, description, objects FROM shots WHERE id = ?",
             arrayOf(id.toString()),
         ).use { c ->
             if (!c.moveToFirst()) return null
@@ -117,6 +114,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 keywords = c.getString(SHOT_COLUMN_COUNT + 3),
                 pageUrl = c.getString(SHOT_COLUMN_COUNT + 4),
                 appSource = c.getString(SHOT_COLUMN_COUNT + 5),
+                description = c.getString(SHOT_COLUMN_COUNT + 6),
+                objects = c.getString(SHOT_COLUMN_COUNT + 7),
             )
         }
         val collections = db.rawQuery(
@@ -134,9 +133,10 @@ class ShotsRepository(private val database: ShotsDatabase) {
             entities = decodeEntities(row.entities),
             note = row.note,
             collections = collections,
-            keywords = row.keywords?.split(',')?.filter { it.isNotEmpty() }.orEmpty(),
+            keywords = (row.keywords.orEmpty() + "," + row.objects.orEmpty()).split(',').filter { it.isNotEmpty() }.distinct(),
             pageUrl = row.pageUrl,
             appSource = row.appSource,
+            description = row.description?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -148,6 +148,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val keywords: String?,
         val pageUrl: String?,
         val appSource: String?,
+        val description: String?,
+        val objects: String?,
     )
 
     fun observeCounts(): Flow<IndexCounts> = observe { counts() }
@@ -166,8 +168,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
             }
         }
         val updating = db.rawQuery(
-            "SELECT COUNT(*) FROM shots WHERE state = ? AND clip_version < ?",
-            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.CLIP_VERSION.toString()),
+            "SELECT COUNT(*) FROM shots WHERE state = ? AND (clip_version < ? OR describe_version < ?)",
+            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.CLIP_VERSION.toString(), ShotsDatabase.DESCRIBE_VERSION.toString()),
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
         return IndexCounts(total, indexed, pending, failed, updating)
     }
@@ -194,7 +196,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
     suspend fun textsByIds(ids: List<Long>): Map<Long, String> = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext emptyMap()
         ids.chunked(500).flatMap { chunk ->
-            db.rawQuery("SELECT id, COALESCE(ocr_text, '') || ' ' || COALESCE(note, '') FROM shots WHERE id IN (${chunk.joinToString(",")})", null).use { c ->
+            db.rawQuery("SELECT id, COALESCE(description, '') || ' ' || COALESCE(ocr_text, '') || ' ' || COALESCE(note, '') FROM shots WHERE id IN (${chunk.joinToString(",")})", null).use { c ->
                 buildList { while (c.moveToNext()) add(c.getLong(0) to c.getString(1)) }
             }
         }.toMap()
@@ -214,8 +216,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
 
     /**
      * Precise text search (see [PreciseSearch]): every word must match; a match in the app, a
-     * heading, a picture keyword or the user's note counts far more than one in the screen text.
-     * Word beginnings ("zom") only when nothing matches whole words.
+     * heading, a picture keyword or object, or the user's note counts most, then the description,
+     * then the screen text. Word beginnings ("zom") only when nothing matches whole words.
      */
     suspend fun textSearch(query: String, words: PictureWords?): PreciseSearch.Ranked = withContext(Dispatchers.IO) {
         val none = PreciseSearch.Ranked(emptyList(), emptyList())
@@ -225,10 +227,12 @@ class ShotsRepository(private val database: ShotsDatabase) {
             return try {
                 db.rawQuery(
                     "SELECT s.id, COALESCE(s.app,'') || ' ' || COALESCE(s.headline,'') || ' ' || COALESCE(s.note,'') || ' ' || " +
-                        "REPLACE(s.keywords, ',', ' '), COALESCE(s.ocr_text,''), s.taken_at " +
+                        "REPLACE(s.keywords || s.objects, ',', ' '), COALESCE(s.ocr_text,''), s.taken_at, COALESCE(s.description,'') " +
                         "FROM shots_fts f JOIN shots s ON s.id = f.docid WHERE shots_fts MATCH ? LIMIT 2000",
                     arrayOf(match),
-                ).use { c -> buildList { while (c.moveToNext()) add(PreciseSearch.SearchDoc(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3))) } }
+                ).use { c ->
+                    buildList { while (c.moveToNext()) add(PreciseSearch.SearchDoc(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getString(4))) }
+                }
             } catch (_: SQLiteException) {
                 // Odd input the FTS parser rejects.
                 emptyList()
@@ -243,8 +247,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
         if (query.isBlank()) return@withContext none
         val ids = db.rawQuery(
             "SELECT id FROM shots WHERE ocr_text LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\' OR app LIKE ? ESCAPE '\\' " +
-                "ORDER BY taken_at DESC LIMIT 500",
-            arrayOf(like, like, like),
+                "OR description LIKE ? ESCAPE '\\' ORDER BY taken_at DESC LIMIT 500",
+            arrayOf(like, like, like, like),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
         PreciseSearch.Ranked(ids, emptyList())
     }
@@ -260,17 +264,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
         db.rawQuery("SELECT id FROM shots WHERE categories LIKE ? ORDER BY taken_at DESC", arrayOf("%,$category,%")).use { c ->
             buildList { while (c.moveToNext()) add(c.getLong(0)) }
         }
-    }
-
-    /** CLIP text→image hits, already thresholded. Loads the text encoder on first use. */
-    suspend fun visualSearch(query: String, clip: ClipModel, filter: ((Long) -> Boolean)? = null): List<VectorHit> = withContext(Dispatchers.Default) {
-        ensureVectors()
-        if (vectorIndex.size == 0) return@withContext emptyList()
-        val q = clip.embedQuery(query)
-        // Screens share a lot of layout, so a merely similar-looking one (a shopping list for "shoes")
-        // scores higher than an unrelated photo would: a high bar, and only the closest few.
-        // (MobileCLIP2-S2 scores run ~0.02 above S0's: a photo vs the query naming it, median 0.27.)
-        HybridRanker.filterVisual(vectorIndex.search(q, 150, filter), floor = 0.26f, dropFromTop = 0.025f, max = 12)
     }
 
     suspend fun similar(id: Long, limit: Int = 12): List<Long> = withContext(Dispatchers.Default) {
@@ -514,6 +507,27 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 }
             WordsJob(row.id, row.text, row.source, crops)
         }
+    }
+
+    /** A screenshot to describe, with the text read from it (to check the description's quotes against). */
+    class DescribeJob(val id: Long, val uri: android.net.Uri, val text: String)
+
+    /** Read screenshots not described yet by the current model, newest first ([since]: taken from then on). */
+    suspend fun describeQueue(limit: Int, since: Long = 0L): List<DescribeJob> = withContext(Dispatchers.IO) {
+        db.rawQuery(
+            "SELECT id, uri, COALESCE(ocr_text,'') FROM shots WHERE state = ? AND describe_version < ? AND taken_at >= ? ORDER BY taken_at DESC LIMIT ?",
+            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.DESCRIBE_VERSION.toString(), since.toString(), limit.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(DescribeJob(c.getLong(0), c.getString(1).toUri(), c.getString(2))) } }
+    }
+
+    suspend fun saveDescription(id: Long, description: String?, objects: List<String>) = withContext(Dispatchers.IO) {
+        db.update("shots", ContentValues().apply {
+            put("description", description?.takeIf { it.isNotBlank() })
+            put("objects", if (objects.isEmpty()) "" else objects.joinToString(",", ",", ","))
+            put("describe_version", ShotsDatabase.DESCRIBE_VERSION)
+        }, "id = ?", arrayOf(id.toString()))
+        rewriteFts(id)
+        changed()
     }
 
     /** A screenshot whose picture was read with an older image model. */

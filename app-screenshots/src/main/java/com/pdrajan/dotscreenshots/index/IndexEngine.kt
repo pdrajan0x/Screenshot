@@ -123,7 +123,7 @@ class IndexEngine(
                         failed++
                         if (failed <= 3) DotLog.e("process: failed on ${item.name} (${item.uri})", e)
                         else DotLog.w("process: failed on ${item.name}: ${e.javaClass.simpleName}: ${e.message}")
-                        _lastError.value = describe(e)
+                        _lastError.value = errorText(e)
                         repo.markFailed(item.id)
                     }
                     done++
@@ -140,7 +140,7 @@ class IndexEngine(
                 throw e
             } catch (e: Throwable) {
                 DotLog.e("process: stopped before indexing", e)
-                _lastError.value = describe(e)
+                _lastError.value = errorText(e)
             } finally {
                 reader?.close()
                 _progress.value = IndexProgress()
@@ -217,7 +217,51 @@ class IndexEngine(
         done
     }
 
-    private fun describe(e: Throwable): String {
+    /**
+     * Describes up to [limit] read screenshots with Florence-2 (taken from [since] on, newest
+     * first): a description and the objects in their pictures. Returns how many were done.
+     */
+    suspend fun describe(limit: Int, since: Long = 0L, deadline: Long = Long.MAX_VALUE, isStopped: () -> Boolean = { false }): Int =
+        batchLock.withLock {
+            val jobs = repo.describeQueue(limit, since)
+            if (jobs.isEmpty()) return 0
+            val florence = hub.florence() ?: return 0
+            _progress.value = IndexProgress(running = true, total = jobs.size)
+            var done = 0
+            val started = System.currentTimeMillis()
+            try {
+                for (job in jobs) {
+                    if (isStopped() || System.currentTimeMillis() > deadline) break
+                    currentCoroutineContext().ensureActive()
+                    try {
+                        val d = withContext(Dispatchers.Default) {
+                            val bitmap = BitmapLoader.load(context.contentResolver, job.uri)
+                            try {
+                                florence.describe(bitmap, job.text)
+                            } finally {
+                                bitmap.recycle()
+                            }
+                        }
+                        repo.saveDescription(job.id, d.text, d.objects)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        DotLog.w("describe: couldn't describe ${job.uri}: ${e.javaClass.simpleName}: ${e.message}")
+                        // Don't retry forever; it stays findable by its text and keywords.
+                        repo.saveDescription(job.id, null, emptyList())
+                    }
+                    done++
+                    _progress.value = IndexProgress(true, done, jobs.size)
+                    hub.touch()
+                }
+            } finally {
+                _progress.value = IndexProgress()
+            }
+            DotLog.i("describe: described $done screenshots in ${System.currentTimeMillis() - started} ms")
+            done
+        }
+
+    private fun errorText(e: Throwable): String {
         var root = e
         while (root.cause != null && root.cause !== root) root = root.cause!!
         return "${root.javaClass.simpleName}: ${root.message ?: "no message"}".take(160)

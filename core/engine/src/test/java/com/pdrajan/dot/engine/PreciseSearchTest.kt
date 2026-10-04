@@ -106,4 +106,18 @@ class PreciseSearchTest {
         // Closer to "a photo" than to any word: nothing.
         assertEquals(emptyList<String>(), tagger.keywords(listOf(v(0.1f, 0f, 1f))))
     }
+
+    @Test
+    fun descriptionRanksBetweenKeywordsAndScreenText() {
+        val terms = PreciseSearch.terms("red shoes", words)
+        val ranked = PreciseSearch.rank(
+            terms,
+            listOf(
+                PreciseSearch.SearchDoc(1, strong = "", body = "red shoes sale today"),
+                PreciseSearch.SearchDoc(2, strong = "", body = "", described = "A pair of red shoes with a white sole"),
+                PreciseSearch.SearchDoc(3, strong = "red shoes", body = ""),
+            ),
+        )
+        assertEquals(listOf(3L, 2L, 1L), ranked.all)
+    }
 }

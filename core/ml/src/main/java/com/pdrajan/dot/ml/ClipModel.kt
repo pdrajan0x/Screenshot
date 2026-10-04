@@ -12,7 +12,6 @@ import android.graphics.Rect
 import com.pdrajan.dot.engine.ClipTokenizer
 import com.pdrajan.dot.engine.CropPlanner
 import com.pdrajan.dot.engine.PixelPreprocess
-import com.pdrajan.dot.engine.VectorMath
 import org.json.JSONObject
 import java.io.Closeable
 import java.io.FileInputStream
@@ -73,10 +72,6 @@ class ClipModel private constructor(
         val vocab = runCatching { assets.open("clip/bpe_simple_vocab_16e6.txt") }.getOrElse { assets.open("clip/bpe_simple_vocab_16e6.txt.gz") }
         vocab.use { ClipTokenizer(it, config.contextLength) }
     }
-    private val queryCache = object : LinkedHashMap<String, FloatArray>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>?) = size > 64
-    }
-
     private fun options(level: String) = OrtSession.SessionOptions().apply {
         setIntraOpNumThreads(threads)
         setOptimizationLevel(
@@ -142,19 +137,6 @@ class ClipModel private constructor(
                 return (out[0].value as Array<FloatArray>).toList()
             }
         }
-    }
-
-    /**
-     * Search query embedding: an ensemble of the raw query and two prompt templates, which helps
-     * single-word queries ("car") match photos inside screenshots.
-     */
-    fun embedQuery(query: String): FloatArray {
-        val key = query.trim().lowercase()
-        synchronized(queryCache) { queryCache[key]?.let { return it } }
-        val variants = listOf(key, "a photo of $key", "a screenshot of $key")
-        val result = VectorMath.mean(embedTexts(variants))
-        synchronized(queryCache) { queryCache[key] = result }
-        return result
     }
 
     /** Frees the text encoder (~65 MB) when search hasn't been used for a while. */

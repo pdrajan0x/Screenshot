@@ -95,7 +95,8 @@ class AppContainer(val context: Context) {
     }
 
     /**
-     * Reads up to [STEP] screenshots (text, headings, picture keywords, app, categories), brings up
+     * Reads up to [STEP] screenshots (text, headings, picture keywords, app, categories), describes
+     * up to [STEP] read ones (Florence-2: description and objects), brings up
      * to [STEP] * 25 older ones up to date from what is already stored (no image is read again), and
      * re-reads the picture of up to [STEP] screenshots indexed with an older image model.
      * New screenshots always; older ones (and re-reading pictures) only while charging, or as chosen
@@ -109,9 +110,10 @@ class AppContainer(val context: Context) {
     ): Int {
         val since = power.since(userAsked)
         val read = engine.process(limit = STEP, deadline = deadline, since = since, isStopped = isStopped)
+        val described = engine.describe(limit = STEP, since = since, deadline = deadline, isStopped = isStopped)
         val refreshed = engine.refreshWords(limit = STEP * 25)
         val reread = if (power.backlogAllowed(userAsked)) engine.reembed(limit = STEP, deadline = deadline, isStopped = isStopped) else 0
-        return read + refreshed + reread
+        return read + described + refreshed + reread
     }
 
     /** Left the app: work started from the screen stops (even "Do it now"), unless the phone is charging. */

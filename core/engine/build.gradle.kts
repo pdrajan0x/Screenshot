@@ -18,6 +18,8 @@ kotlin {
 dependencies {
     // Android has org.json built in; only compiled against here (picture keyword list parsing).
     compileOnly(libs.org.json)
+    // FlorenceModel uses the ONNX Runtime API; on Android onnxruntime-android provides it (core:ml).
+    compileOnly(libs.onnxruntime.jvm)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
     testImplementation(libs.onnxruntime.jvm)

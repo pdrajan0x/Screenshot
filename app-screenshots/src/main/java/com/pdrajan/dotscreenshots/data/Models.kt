@@ -34,8 +34,10 @@ data class ShotDetail(
     val entities: List<Entity>,
     val note: String,
     val collections: List<ShotCollection>,
-    /** What MobileCLIP sees in the picture ("shoes", "beach"); empty for ordinary app screens. */
+    /** What's in the picture: MobileCLIP's keywords ("shoes", "beach") and the objects Florence-2 found ("suit", "boot"). */
     val keywords: List<String> = emptyList(),
+    /** Florence-2's description of the screenshot; null until it has been described. */
+    val description: String? = null,
     /** For browser screenshots: the page that was open. */
     val pageUrl: String? = null,
     /** How the source app was found: file, user or visual (the screen's words; older versions: usage, model, guess). */
@@ -58,5 +60,5 @@ data class SearchHit(
     val snippet: String?,
 )
 
-/** [updating]: read earlier with an older image model; their picture is read again (while charging). */
+/** [updating]: read but not finished: not described yet, or their picture is read again for the newer image model. */
 data class IndexCounts(val total: Int, val indexed: Int, val pending: Int, val failed: Int, val updating: Int = 0)

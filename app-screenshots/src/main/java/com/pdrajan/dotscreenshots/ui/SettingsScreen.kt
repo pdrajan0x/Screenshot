@@ -232,6 +232,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                             "Research Model License Agreement (research / non-commercial use).",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    Text("Florence-2-base (descriptions) — MIT License, Microsoft.", style = MaterialTheme.typography.bodySmall)
                     Text("ONNX Runtime — MIT License, Microsoft.", style = MaterialTheme.typography.bodySmall)
                     Text("OpenCLIP tokenizer vocabulary — MIT License, OpenAI.", style = MaterialTheme.typography.bodySmall)
                     Text("Text recognition — Google ML Kit (bundled models).", style = MaterialTheme.typography.bodySmall)

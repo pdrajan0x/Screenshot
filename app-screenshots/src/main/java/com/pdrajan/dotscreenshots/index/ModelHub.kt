@@ -5,6 +5,7 @@ import com.pdrajan.dot.engine.CategoryClassifier
 import com.pdrajan.dot.engine.PictureTagger
 import com.pdrajan.dot.engine.PictureWords
 import com.pdrajan.dot.ml.ClipModel
+import com.pdrajan.dot.ml.FlorenceDescriber
 import com.pdrajan.dot.ml.PromptBank
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,8 +17,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Owns the CLIP model for the whole process. Sessions are released after a minute and a half
- * without use so the ~110 MB of model weights don't sit in RAM while the app is idle.
+ * Owns the models for the whole process: MobileCLIP (picture search, categories, keywords) and
+ * Florence-2 (descriptions). Sessions are released after a minute and a half without use so the
+ * model weights don't sit in RAM while the app is idle.
  */
 class ModelHub(private val context: Context, private val scope: CoroutineScope) {
 
@@ -27,6 +29,10 @@ class ModelHub(private val context: Context, private val scope: CoroutineScope) 
     private var model: ClipModel? = null
     private var classifier: CategoryClassifier? = null
     private var tagger: PictureTagger? = null
+    private var florence: FlorenceDescriber? = null
+
+    /** Whether this build ships the description model. */
+    val describes: Boolean by lazy { FlorenceDescriber.isAvailable(context) }
 
     /** The picture keyword list, for search ("motorcycle" → bike). */
     val words: PictureWords? by lazy { runCatching { PromptBank.pictureWords(context) }.getOrNull() }
@@ -53,6 +59,15 @@ class ModelHub(private val context: Context, private val scope: CoroutineScope) 
         }
     }
 
+    suspend fun florence(): FlorenceDescriber? {
+        if (!describes) return null
+        val d = mutex.withLock {
+            florence ?: withContext(Dispatchers.IO) { FlorenceDescriber.load(context) }.also { florence = it }
+        }
+        touch()
+        return d
+    }
+
     /** Picture keywords for pictures inside screenshots (prompt embeddings cached on disk after the first run). */
     suspend fun tagger(): PictureTagger? {
         tagger?.let { return it }
@@ -71,7 +86,10 @@ class ModelHub(private val context: Context, private val scope: CoroutineScope) 
         releaseJob?.cancel()
         releaseJob = scope.launch {
             delay(90_000)
-            mutex.withLock { model?.close() }
+            mutex.withLock {
+                model?.close()
+                florence?.close()
+            }
         }
     }
 }
