@@ -58,6 +58,7 @@ import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.engine.Entity
 import com.pdrajan.dot.engine.EntityType
 import com.pdrajan.dot.media.MediaActions
+import com.pdrajan.dotscreenshots.data.IndexState
 import com.pdrajan.dotscreenshots.data.Shot
 import com.pdrajan.dotscreenshots.data.ShotCollection
 import kotlinx.coroutines.launch
@@ -89,7 +90,7 @@ fun ShotThumb(
         cornerRadius = 4.dp,
         onClick = onClick,
         onLongClick = onLongClick,
-        pending = !shot.summarized,
+        pending = shot.state == IndexState.PENDING,
         overlay = overlay,
     )
 }

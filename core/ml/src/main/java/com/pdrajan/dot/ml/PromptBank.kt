@@ -3,6 +3,8 @@ package com.pdrajan.dot.ml
 import android.content.Context
 import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.engine.CategoryClassifier
+import com.pdrajan.dot.engine.PictureTagger
+import com.pdrajan.dot.engine.PictureWords
 import com.pdrajan.dot.engine.PhotoTagger
 import com.pdrajan.dot.engine.PhotoTags
 import java.io.DataInputStream
@@ -35,6 +37,17 @@ object PromptBank {
         for (t in PhotoTags.ALL) byTag[t.id] = t.prompts.map { vectors[i++] }
         val background = PhotoTags.BACKGROUND.map { vectors[i++] }
         return PhotoTagger(byTag, background, clip.config.logitScale)
+    }
+
+    /** The precise picture keywords (assets/clip/picture_words.json). */
+    fun pictureWords(context: Context): PictureWords =
+        context.assets.open("clip/picture_words.json").bufferedReader().use { PictureWords.parse(it.readText()) }
+
+    /** Picture keywords for photos, or for pictures inside screenshots ([forScreenshots]: app screens get none). */
+    fun pictureTagger(context: Context, clip: ClipModel, forScreenshots: Boolean): PictureTagger {
+        val words = pictureWords(context)
+        val prompts = words.prompts(forScreenshots)
+        return PictureTagger(words, embed(context, clip, if (forScreenshots) "shotwords" else "photowords", prompts), clip.config.logitScale, forScreenshots)
     }
 
     fun embed(context: Context, clip: ClipModel, name: String, prompts: List<String>): List<FloatArray> {

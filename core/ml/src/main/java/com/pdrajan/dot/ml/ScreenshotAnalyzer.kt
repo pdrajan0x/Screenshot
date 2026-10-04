@@ -4,11 +4,15 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import com.pdrajan.dot.engine.AppHints
+import com.pdrajan.dot.engine.AppNames
 import com.pdrajan.dot.engine.Browsers
 import com.pdrajan.dot.engine.CategoryClassifier
 import com.pdrajan.dot.engine.Entity
 import com.pdrajan.dot.engine.EntityExtractor
+import com.pdrajan.dot.engine.Headline
 import com.pdrajan.dot.engine.PageLink
+import com.pdrajan.dot.engine.PictureTagger
 import com.pdrajan.dot.engine.SourceApp
 import com.pdrajan.dot.media.DotLog
 
@@ -18,9 +22,9 @@ enum class AppSource(val code: String) {
     USAGE("usage"),
     /** The phone maker put it in the file name. */
     FILE("file"),
-    /** Earlier versions: recognised from how the screen looks and its text. */
+    /** Recognised from words the app's own interface shows ("Join the conversation" → Reddit). */
     VISUAL("visual"),
-    /** The AI model named it. */
+    /** Earlier versions: an AI model named it. */
     MODEL("model"),
     /** Earlier versions: a look-alike guess. */
     GUESS("guess"),
@@ -45,12 +49,16 @@ data class ScreenshotAnalysis(
     val appPackage: String? = null,
     /** For browser screenshots: the page in the address bar. */
     val pageUrl: String? = null,
+    /** Lines in clearly bigger text (titles, names, headlines). */
+    val headline: String = "",
+    /** What MobileCLIP sees in pictures on the screen ("shoes", "beach"); empty for ordinary app screens. */
+    val keywords: List<String> = emptyList(),
 )
 
 /**
  * Full on-device pipeline for one image: decode → OCR (with line positions) → CLIP crops →
- * source app (only when the file name says it; the AI names it otherwise) → categories, entities
- * and page link.
+ * source app (the file name when the phone puts it there, else the screen's interface words) →
+ * headings, picture keywords, categories, entities and page link.
  */
 class ScreenshotAnalyzer(
     private val context: Context,
@@ -58,6 +66,9 @@ class ScreenshotAnalyzer(
     /** Null when ML Kit couldn't be set up; screenshots are then indexed without text, to be read later. */
     private val reader: TextReader?,
     private val classifier: CategoryClassifier,
+    private val tagger: PictureTagger,
+    /** The phone's apps, so a recognised app shows under the name the phone uses. */
+    private val installed: List<AppNames.Choice>,
     private val extractor: EntityExtractor = EntityExtractor(),
 ) {
     private var loggedOcrError = false
@@ -86,7 +97,7 @@ class ScreenshotAnalyzer(
             }
             val text = ocr.text
             val crops = clip.embedImage(bitmap, maxCrops)
-            val app = appFromFileName(displayName)
+            val app = appFromFileName(displayName) ?: appFromWords(text)
             val browser = Browsers.isBrowser(app?.label, app?.packageName)
             val pageUrl = PageLink.find(ocr.lines, browser)
             val categories = classifier.classify(crops, text, app?.label).categories
@@ -102,6 +113,8 @@ class ScreenshotAnalyzer(
                 appSource = app?.source,
                 appPackage = app?.packageName,
                 pageUrl = pageUrl,
+                headline = Headline.from(ocr.lines),
+                keywords = tagger.keywords(crops),
             )
         } finally {
             bitmap.recycle()
@@ -110,7 +123,14 @@ class ScreenshotAnalyzer(
 
     private class ResolvedApp(val label: String, val packageName: String?, val source: AppSource)
 
-    /** Some phone makers put the app in the screenshot's file name: then it's certain. Otherwise the AI names it later. */
+    /** The app named by the screen's own interface words, under the phone's name for it when installed. */
+    private fun appFromWords(text: String): ResolvedApp? {
+        val name = AppHints.best(text) ?: return null
+        val choice = AppNames.match(name, installed) ?: AppNames.Choice(name, null)
+        return ResolvedApp(choice.label, choice.packageName, AppSource.VISUAL)
+    }
+
+    /** Some phone makers put the app in the screenshot's file name: then it's certain. */
     private fun appFromFileName(displayName: String): ResolvedApp? {
         val hint = SourceApp.fromFileName(displayName) ?: return null
         hint.label?.let { return ResolvedApp(it, null, AppSource.FILE) }

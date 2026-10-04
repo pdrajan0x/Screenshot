@@ -166,10 +166,8 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
 
     suspend fun appChoices(): List<AppNames.Choice> = c.appChoices()
 
-    /** The user says which app it's from; similar screenshots are re-guessed with that in mind. */
+    /** The user says which app it's from. */
     fun setApp(id: Long, choice: AppNames.Choice) = c.setApp(id, choice.label, choice.packageName)
-
-    fun summariseNow(id: Long) = c.summariseNow(id)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -276,7 +274,7 @@ fun DetailScreen(
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
                     .navigationBarsPadding(),
             ) {
-                // A handle with the title: tap it (or swipe the screenshot up) for the summary and details.
+                // A handle: tap it (or swipe the screenshot up) for the details.
                 Column(
                     Modifier.fillMaxWidth().clickable { requestDetails(open = true) }.padding(horizontal = 24.dp, vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -284,7 +282,7 @@ fun DetailScreen(
                     Box(Modifier.width(36.dp).height(4.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.5f)))
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        detail?.shot?.title ?: "Swipe up for details",
+                        "Swipe up for details",
                         style = MaterialTheme.typography.labelLarge,
                         color = Color.White,
                         maxLines = 1,
@@ -340,7 +338,7 @@ fun DetailScreen(
 private data class PageRequest(val id: Long, val open: Boolean, val serial: Int)
 
 /**
- * One screenshot, full screen, with its title, summary and details below it: swipe up to read
+ * One screenshot, full screen, with its details below it: swipe up to read
  * them, like Pixel Screenshots. Pinch and double-tap zoom the picture.
  */
 @Composable
@@ -438,38 +436,21 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
         )
         Spacer(Modifier.height(16.dp))
         Column(Modifier.padding(horizontal = 20.dp)) {
-            val title = d.shot.title
-            Text(title ?: d.shot.app ?: "Screenshot", style = MaterialTheme.typography.headlineSmall)
+            Text(d.shot.app ?: "Screenshot", style = MaterialTheme.typography.headlineSmall)
             Text(
                 DateLabels.dateTime(d.shot.takenAt),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             AppLine(d, onClick = { appPicker = true })
-            d.summary?.let { summary ->
-                Spacer(Modifier.height(10.dp))
-                Text(summary, style = MaterialTheme.typography.bodyMedium)
-            }
-            if (!d.shot.summarized && d.shot.state == IndexState.INDEXED) {
-                var asked by remember(d.shot.id) { mutableStateOf(false) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (asked) "Summarising… a few seconds" else "Not summarised yet",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (!asked) TextButton(onClick = { asked = true; vm.summariseNow(d.shot.id) }) { Text("Summarise now", color = DotTheme.extra.accent) }
-                }
-            }
             d.pageUrl?.let { url ->
                 Spacer(Modifier.height(12.dp))
                 val host = runCatching { Uri.parse(url).host?.removePrefix("www.") }.getOrNull() ?: "page"
                 DotOutlinedButton("Open $host", onClick = { ctx.startSafely(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }, icon = Icons.AutoMirrored.Rounded.OpenInNew)
             }
-            if (d.tags.isNotEmpty()) {
+            if (d.keywords.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                KeywordChips(d.tags, onClick = onSearch)
+                KeywordChips(d.keywords, onClick = onSearch)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -574,13 +555,13 @@ private fun formatBytes(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-/** Which app the screenshot is from (from the file name, the user, or named by the AI); tap to correct it. */
+/** Which app the screenshot is from (the file name, the user, or the screen's own words); tap to correct it. */
 @Composable
 private fun AppLine(d: ShotDetail, onClick: () -> Unit) {
     val app = d.shot.app
     val text = when {
         app == null -> "Which app is this from?"
-        d.appSource == "model" -> "$app · named by AI"
+        d.appSource == "visual" -> "$app · from the screen's words"
         else -> app
     }
     Row(

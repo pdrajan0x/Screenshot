@@ -1,16 +1,14 @@
-package com.pdrajan.dot.llm
+package com.pdrajan.dot.media
 
 import android.content.Context
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
-import com.pdrajan.dot.media.ProcessingPolicy
 
 /**
- * When the on-device model (and background work in general) may run, from the user's
- * [ProcessingPolicy] plus what the phone says: each description or summary is seconds of full CPU,
- * so on battery it needs the user's go-ahead and enough charge, never runs with battery saver on or
- * on a warm phone, and nothing at all runs on a hot one.
+ * When background work (reading text, picture keywords, faces) may run, from the user's
+ * [ProcessingPolicy] plus what the phone says: on battery it needs enough charge, never runs with
+ * battery saver on or on a warm phone, and nothing at all runs on a hot one.
  */
 class PowerGate(context: Context, private val policy: () -> ProcessingPolicy) {
     private val battery = context.getSystemService(BatteryManager::class.java)
@@ -52,15 +50,6 @@ class PowerGate(context: Context, private val policy: () -> ProcessingPolicy) {
 
     /** Items newer than this are "new": done right away, even on battery. */
     fun since(userAsked: Boolean = false): Long = if (backlogAllowed(userAsked)) 0L else System.currentTimeMillis() - RECENT_MILLIS
-
-    /**
-     * Run the AI gently (background priority, efficient cores) so the phone stays smooth: always on
-     * battery, unless the user asked for it ("Do it now", "Describe now").
-     */
-    fun gentle(userAsked: Boolean = false): Boolean = !userAsked && !isCharging
-
-    /** One thread per fast core while charging; at most two on battery (slower, but cooler and lighter). */
-    fun threads(): Int = if (isCharging) LlamaEngine.defaultThreads() else minOf(2, LlamaEngine.defaultThreads())
 
     private companion object {
         const val RECENT_MILLIS = 2L * 24 * 60 * 60_000

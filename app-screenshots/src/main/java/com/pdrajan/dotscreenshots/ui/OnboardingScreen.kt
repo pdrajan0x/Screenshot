@@ -89,8 +89,8 @@ fun OnboardingScreen(onDone: () -> Unit) {
             )
             Spacer(Modifier.height(40.dp))
             Feature(Icons.Rounded.TravelExplore, "Search by words or by what you see", "\"car\", \"movie\", \"UPI\", a name, a price…")
-            Feature(Icons.Rounded.Lock, "Everything stays on your phone", "No account, no cloud. AI runs on the device.")
-            Feature(Icons.Rounded.BatteryChargingFull, "Easy on the battery", "You choose when the AI works: only while charging, or on battery above a level.")
+            Feature(Icons.Rounded.Lock, "Everything stays on your phone", "No account, no cloud. Your screenshots never leave the phone.")
+            Feature(Icons.Rounded.BatteryChargingFull, "Easy on the battery", "You choose when older screenshots are read: only while charging, or on battery above a level.")
             Spacer(Modifier.weight(1f))
 
             when {

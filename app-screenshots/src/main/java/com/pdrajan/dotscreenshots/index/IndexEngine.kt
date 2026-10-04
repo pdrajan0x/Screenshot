@@ -1,6 +1,8 @@
 package com.pdrajan.dotscreenshots.index
 
 import android.content.Context
+import com.pdrajan.dot.engine.AppHints
+import com.pdrajan.dot.engine.AppNames
 import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaAccess
 import com.pdrajan.dot.media.MediaPermissions
@@ -30,6 +32,8 @@ class IndexEngine(
     private val settings: Settings,
     private val hub: ModelHub,
     private val media: MediaStoreSource,
+    /** The phone's apps, so a recognised app shows under the phone's name for it. */
+    private val installed: () -> List<AppNames.Choice>,
 ) {
     private val _progress = MutableStateFlow(IndexProgress())
     val progress: StateFlow<IndexProgress> = _progress.asStateFlow()
@@ -89,14 +93,15 @@ class IndexEngine(
                 val clip = hub.clip()
                 if (clip == null) {
                     DotLog.e("process: CLIP model missing from the APK")
-                    _lastError.value = "AI model missing from this build"
+                    _lastError.value = "Image model missing from this build"
                     return 0
                 }
                 DotLog.i("process: CLIP ready in ${System.currentTimeMillis() - t} ms")
                 t = System.currentTimeMillis()
                 val classifier = hub.classifier() ?: return 0
-                DotLog.i("process: category prompts ready in ${System.currentTimeMillis() - t} ms")
-                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier)
+                val tagger = hub.tagger() ?: return 0
+                DotLog.i("process: category and keyword prompts ready in ${System.currentTimeMillis() - t} ms")
+                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier, tagger, installed())
                 _progress.value = IndexProgress(running = true, total = pending.size)
                 var noText = 0
                 for (item in pending) {
@@ -142,6 +147,30 @@ class IndexEngine(
             // Successes only, so callers looping "while > 0" stop when a whole batch fails.
             done - failed
         }
+
+    /**
+     * Brings screenshots read by an earlier version up to date: picture keywords from their stored
+     * look, the app from their stored text. No image is opened, so it is quick and light; returns
+     * how many were updated.
+     */
+    suspend fun refreshWords(limit: Int): Int = batchLock.withLock {
+        val jobs = repo.wordsQueue(limit)
+        if (jobs.isEmpty()) return 0
+        val tagger = hub.tagger() ?: return 0
+        val apps = installed()
+        var done = 0
+        for (job in jobs) {
+            currentCoroutineContext().ensureActive()
+            val keywords = if (job.crops.isEmpty()) emptyList() else tagger.keywords(job.crops)
+            val name = AppHints.best(job.text)
+            val app = name?.let { AppNames.match(it, apps) ?: AppNames.Choice(it, null) }
+            repo.saveWords(job.id, keywords, app?.label, app?.packageName)
+            done++
+        }
+        hub.touch()
+        DotLog.i("words: updated $done screenshots from stored text and look")
+        done
+    }
 
     private fun describe(e: Throwable): String {
         var root = e

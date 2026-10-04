@@ -59,7 +59,7 @@ fun ProcessingSettings(policy: ProcessingPolicy, onChange: (ProcessingPolicy) ->
     SettingsSwitchRow(
         title = "Process in the background",
         subtitle = if (policy.background) {
-            "New items are read and described even when $appName is closed."
+            "New items are read even when $appName is closed."
         } else {
             "Only while $appName is open."
         },
@@ -90,7 +90,7 @@ fun ProcessingSettings(policy: ProcessingPolicy, onChange: (ProcessingPolicy) ->
             colors = SliderDefaults.colors(thumbColor = DotTheme.extra.accent, activeTrackColor = DotTheme.extra.accent),
         )
         Text(
-            "Battery saver or a warm phone always pause the AI. Charging is always allowed.",
+            "In the background, battery saver or a warm phone pause it. Charging is always allowed.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

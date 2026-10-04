@@ -12,10 +12,12 @@ import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.engine.FtsQuery
 import com.pdrajan.dot.engine.PageLink
 import com.pdrajan.dot.engine.HybridRanker
+import com.pdrajan.dot.engine.PictureWords
+import com.pdrajan.dot.engine.PreciseSearch
 import com.pdrajan.dot.engine.QuantizedVector
-import com.pdrajan.dot.engine.ScreenshotSummary
 import com.pdrajan.dot.engine.VectorHit
 import com.pdrajan.dot.engine.VectorIndex
+import com.pdrajan.dot.engine.VectorMath
 import com.pdrajan.dot.media.MediaItem
 import com.pdrajan.dot.ml.ClipModel
 import com.pdrajan.dot.ml.ScreenshotAnalysis
@@ -103,7 +105,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
 
     private fun detail(id: Long): ShotDetail? {
         val row = db.rawQuery(
-            "SELECT $SHOT_COLUMNS, ocr_text, entities, note, summary, tags, page_url, app_source FROM shots WHERE id = ?",
+            "SELECT $SHOT_COLUMNS, ocr_text, entities, note, keywords, page_url, app_source FROM shots WHERE id = ?",
             arrayOf(id.toString()),
         ).use { c ->
             if (!c.moveToFirst()) return null
@@ -112,10 +114,9 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 text = c.getString(SHOT_COLUMN_COUNT) ?: "",
                 entities = c.getString(SHOT_COLUMN_COUNT + 1),
                 note = c.getString(SHOT_COLUMN_COUNT + 2) ?: "",
-                summary = c.getString(SHOT_COLUMN_COUNT + 3),
-                tags = c.getString(SHOT_COLUMN_COUNT + 4),
-                pageUrl = c.getString(SHOT_COLUMN_COUNT + 5),
-                appSource = c.getString(SHOT_COLUMN_COUNT + 6),
+                keywords = c.getString(SHOT_COLUMN_COUNT + 3),
+                pageUrl = c.getString(SHOT_COLUMN_COUNT + 4),
+                appSource = c.getString(SHOT_COLUMN_COUNT + 5),
             )
         }
         val collections = db.rawQuery(
@@ -133,8 +134,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
             entities = decodeEntities(row.entities),
             note = row.note,
             collections = collections,
-            summary = row.summary,
-            tags = row.tags?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty(),
+            keywords = row.keywords?.split(',')?.filter { it.isNotEmpty() }.orEmpty(),
             pageUrl = row.pageUrl,
             appSource = row.appSource,
         )
@@ -145,8 +145,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val text: String,
         val entities: String?,
         val note: String,
-        val summary: String?,
-        val tags: String?,
+        val keywords: String?,
         val pageUrl: String?,
         val appSource: String?,
     )
@@ -173,9 +172,9 @@ class ShotsRepository(private val database: ShotsDatabase) {
     fun ocrPendingCount(): Int =
         db.rawQuery("SELECT COUNT(*) FROM shots WHERE ocr_pending = 1", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
-    /** Queues those screenshots again now that text can be read (and their summaries, written without it). */
+    /** Queues those screenshots again now that text can be read. */
     suspend fun requeueOcrPending(): Int = withContext(Dispatchers.IO) {
-        val n = db.compileStatement("UPDATE shots SET state = ${IndexState.PENDING.code}, ocr_pending = 0, summary_state = $SUMMARY_PENDING WHERE ocr_pending = 1")
+        val n = db.compileStatement("UPDATE shots SET state = ${IndexState.PENDING.code}, ocr_pending = 0 WHERE ocr_pending = 1")
             .use { it.executeUpdateDelete() }
         if (n > 0) changed()
         n
@@ -209,44 +208,48 @@ class ShotsRepository(private val database: ShotsDatabase) {
 
     // ---------------------------------------------------------------- search
 
-    data class TextMatches(val ids: List<Long>, val noteIds: List<Long>)
-
-    suspend fun textSearch(query: String): TextMatches = withContext(Dispatchers.IO) {
-        val terms = FtsQuery.terms(query)
-        if (terms.isEmpty()) return@withContext TextMatches(emptyList(), emptyList())
-        val rows = ArrayList<Triple<Long, String, String>>()
-        fun fts(match: String?) {
-            if (match == null) return
-            try {
+    /**
+     * Precise text search (see [PreciseSearch]): every word must match; a match in the app, a
+     * heading, a picture keyword or the user's note counts far more than one in the screen text.
+     * Word beginnings ("zom") only when nothing matches whole words.
+     */
+    suspend fun textSearch(query: String, words: PictureWords?): PreciseSearch.Ranked = withContext(Dispatchers.IO) {
+        val none = PreciseSearch.Ranked(emptyList(), emptyList())
+        val terms = PreciseSearch.terms(query, words)
+        fun docs(match: String?): List<PreciseSearch.SearchDoc> {
+            if (match == null) return emptyList()
+            return try {
                 db.rawQuery(
-                    "SELECT docid, ocr_text || ' ' || app || ' ' || title || ' ' || summary || ' ' || tags, note " +
-                        "FROM shots_fts WHERE shots_fts MATCH ? LIMIT 1000",
+                    "SELECT s.id, COALESCE(s.app,'') || ' ' || COALESCE(s.headline,'') || ' ' || COALESCE(s.note,'') || ' ' || " +
+                        "REPLACE(s.keywords, ',', ' '), COALESCE(s.ocr_text,''), s.taken_at " +
+                        "FROM shots_fts f JOIN shots s ON s.id = f.docid WHERE shots_fts MATCH ? LIMIT 2000",
                     arrayOf(match),
-                ).use { c ->
-                    while (c.moveToNext()) rows += Triple(c.getLong(0), c.getString(1), c.getString(2))
-                }
+                ).use { c -> buildList { while (c.moveToNext()) add(PreciseSearch.SearchDoc(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3))) } }
             } catch (_: SQLiteException) {
-                // Odd input the FTS parser rejects; the substring fallback below still runs.
+                // Odd input the FTS parser rejects.
+                emptyList()
             }
         }
-        // Whole words ("car", "cars"; not "cart" or "Oscar"); word beginnings only when nothing matches.
-        fts(FtsQuery.words(query))
-        val whole = rows.isNotEmpty()
-        if (!whole) fts(FtsQuery.build(query))
-        if (rows.isEmpty()) {
-            val like = "%" + query.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-            db.rawQuery(
-                "SELECT id, COALESCE(ocr_text,'') || ' ' || COALESCE(app,'') || ' ' || COALESCE(title,'') || ' ' || " +
-                    "COALESCE(summary,'') || ' ' || COALESCE(tags,''), COALESCE(note,'') FROM shots " +
-                    "WHERE ocr_text LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\' OR app LIKE ? ESCAPE '\\' " +
-                    "OR title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' LIMIT 1000",
-                arrayOf(like, like, like, like, like, like),
-            ).use { c -> while (c.moveToNext()) rows += Triple(c.getLong(0), c.getString(1), c.getString(2)) }
+        val ranked = PreciseSearch.rank(terms, docs(PreciseSearch.ftsMatch(terms)))
+        if (!ranked.isEmpty) return@withContext ranked
+        val prefix = docs(FtsQuery.build(terms.joinToString(" ") { it.word })).sortedByDescending { it.takenAt }.map { it.id }
+        if (prefix.isNotEmpty()) return@withContext PreciseSearch.Ranked(prefix, emptyList())
+        // Scripts the tokenizer splits oddly: a plain substring match.
+        val like = "%" + query.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        if (query.isBlank()) return@withContext none
+        val ids = db.rawQuery(
+            "SELECT id FROM shots WHERE ocr_text LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\' OR app LIKE ? ESCAPE '\\' " +
+                "ORDER BY taken_at DESC LIMIT 500",
+            arrayOf(like, like, like),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
+        PreciseSearch.Ranked(ids, emptyList())
+    }
+
+    /** Screenshots taken in a date range ("last week"), newest first. */
+    suspend fun idsTakenBetween(start: Long, end: Long): List<Long> = withContext(Dispatchers.IO) {
+        db.rawQuery("SELECT id FROM shots WHERE taken_at >= ? AND taken_at < ? ORDER BY taken_at DESC", arrayOf(start.toString(), end.toString())).use { c ->
+            buildList { while (c.moveToNext()) add(c.getLong(0)) }
         }
-        fun score(text: String) = if (whole) FtsQuery.wordHits(text, terms) else terms.sumOf { t -> occurrences(text.lowercase(), t) }
-        val noteIds = rows.filter { (_, _, note) -> score(note) > 0 }.sortedByDescending { score(it.third) }.map { it.first }
-        val ids = rows.filter { (_, text, _) -> score(text) > 0 }.sortedByDescending { score(it.second) }.map { it.first }
-        TextMatches(ids, noteIds)
     }
 
     suspend fun categoryShots(category: String): List<Long> = withContext(Dispatchers.IO) {
@@ -261,15 +264,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
         if (vectorIndex.size == 0) return@withContext emptyList()
         val q = clip.embedQuery(query)
         // Screens share a lot of layout, so a merely similar-looking one (a shopping list for "shoes")
-        // scores higher than an unrelated photo would: a higher bar than for photos.
-        HybridRanker.filterVisual(vectorIndex.search(q, 150, filter), floor = 0.22f, dropFromTop = 0.04f, max = 40)
-    }
-
-    /** Ids the AI has summarised: search trusts what it wrote over look-alike matching. */
-    suspend fun summarizedIds(): Set<Long> = withContext(Dispatchers.IO) {
-        db.rawQuery("SELECT id FROM shots WHERE summary_state = ?", arrayOf(SUMMARY_DONE.toString())).use { c ->
-            buildSet { while (c.moveToNext()) add(c.getLong(0)) }
-        }
+        // scores higher than an unrelated photo would: a high bar, and only the closest few.
+        HybridRanker.filterVisual(vectorIndex.search(q, 150, filter), floor = 0.24f, dropFromTop = 0.025f, max = 12)
     }
 
     suspend fun similar(id: Long, limit: Int = 12): List<Long> = withContext(Dispatchers.Default) {
@@ -376,12 +372,11 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 if (!keepApp) {
                     put("app_source", analysis.appSource?.code)
                     put("app_package", analysis.appPackage)
-                    // Guessed again by the next identification pass, with everything known by then.
-                    putNull("app_confidence")
                 }
                 put("page_url", analysis.pageUrl)
-                // New text: the summary (if any) is rewritten from it.
-                put("summary_state", SUMMARY_PENDING)
+                put("headline", analysis.headline)
+                put("keywords", if (analysis.keywords.isEmpty()) "" else analysis.keywords.joinToString(",", ",", ","))
+                put("words_version", ShotsDatabase.WORDS_VERSION)
             }, "id = ?", arrayOf(id.toString()))
             rewriteFts(id)
             db.delete("embeddings", "shot_id = ?", arrayOf(id.toString()))
@@ -489,49 +484,36 @@ class ShotsRepository(private val database: ShotsDatabase) {
         changed()
     }
 
-    // ---------------------------------------------------------------- summaries (on-device model)
+    // ---------------------------------------------------------------- keywords and app from stored data
 
-    /** Indexed screenshots still waiting for a summary, newest first; [since] limits to recent ones. */
-    /** One screenshot to summarise right away ("Summarise now"), once its text has been read. */
-    suspend fun summaryJob(id: Long): SummaryJob? = withContext(Dispatchers.IO) {
-        db.rawQuery(
-            "SELECT id, uri, CASE WHEN app_source IN ('file', 'user') THEN app END, COALESCE(ocr_text,''), name FROM shots WHERE id = ? AND state = ?",
-            arrayOf(id.toString(), IndexState.INDEXED.code.toString()),
-        ).use { c -> if (c.moveToFirst()) SummaryJob(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getString(3), c.getString(4)) else null }
-    }
+    /** A screenshot read by an earlier version: its text and look are stored, so keywords and app need no new reading. */
+    class WordsJob(val id: Long, val text: String, val appSource: String?, val crops: List<FloatArray>)
 
-    suspend fun summaryQueue(limit: Int, since: Long = 0L): List<SummaryJob> = withContext(Dispatchers.IO) {
-        db.rawQuery(
-            // Only a certain app (file name, the user) is told to the AI; otherwise it names the app itself.
-            "SELECT id, uri, CASE WHEN app_source IN ('usage', 'file', 'user') THEN app END, " +
-                "COALESCE(ocr_text,''), name FROM shots WHERE state = ? AND summary_state = ? AND taken_at >= ? " +
-                "ORDER BY taken_at DESC LIMIT ?",
-            arrayOf(IndexState.INDEXED.code.toString(), SUMMARY_PENDING.toString(), since.toString(), limit.toString()),
-        ).use { c ->
-            buildList { while (c.moveToNext()) add(SummaryJob(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getString(3), c.getString(4))) }
+    suspend fun wordsQueue(limit: Int): List<WordsJob> = withContext(Dispatchers.IO) {
+        val rows = db.rawQuery(
+            "SELECT id, COALESCE(ocr_text,''), app_source FROM shots WHERE state = ? AND words_version < ? ORDER BY taken_at DESC LIMIT ?",
+            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.WORDS_VERSION.toString(), limit.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(Triple(c.getLong(0), c.getString(1), c.getString(2))) } }
+        rows.map { (id, text, source) ->
+            val crops = db.rawQuery("SELECT vec FROM embeddings WHERE shot_id = ? ORDER BY crop", arrayOf(id.toString())).use { c ->
+                buildList { while (c.moveToNext()) add(VectorMath.l2Normalize(QuantizedVector.fromBlob(c.getBlob(0)).toFloats())) }
+            }
+            WordsJob(id, text, source, crops)
         }
     }
 
-    /**
-     * Stores what the vision model wrote, including the app it says the screen belongs to (one of
-     * the phone's apps, or Lock screen / Home screen). That replaces any earlier guess; an app from
-     * the file name or picked by the user stays.
-     */
-    suspend fun saveSummary(id: Long, summary: ScreenshotSummary, appPackage: String?) = withContext(Dispatchers.IO) {
+    /** Saves picture keywords and, unless the app is certain (file name, the user), the app named by the screen's words. */
+    suspend fun saveWords(id: Long, keywords: List<String>, app: String?, appPackage: String?) = withContext(Dispatchers.IO) {
         db.beginTransaction()
         try {
             db.update("shots", ContentValues().apply {
-                put("title", summary.title.ifBlank { null })
-                put("summary", summary.summary.ifBlank { null })
-                put("tags", summary.tags.joinToString(", ").ifEmpty { null })
-                put("summary_state", SUMMARY_DONE)
+                put("keywords", if (keywords.isEmpty()) "" else keywords.joinToString(",", ",", ","))
+                put("words_version", ShotsDatabase.WORDS_VERSION)
             }, "id = ?", arrayOf(id.toString()))
-            summary.app?.let { app ->
-                db.execSQL(
-                    "UPDATE shots SET app = ?, app_package = ?, app_source = 'model', app_confidence = NULL WHERE id = ? AND $UNCERTAIN_APP",
-                    arrayOf<Any?>(app, appPackage, id),
-                )
-            }
+            db.execSQL(
+                "UPDATE shots SET app = ?, app_package = ?, app_source = ? WHERE id = ? AND $UNCERTAIN_APP",
+                arrayOf<Any?>(app, appPackage, if (app != null) "visual" else null, id),
+            )
             afterAppKnown(id)
             rewriteFts(id)
             db.setTransactionSuccessful()
@@ -561,33 +543,16 @@ class ShotsRepository(private val database: ShotsDatabase) {
 
     private data class Row5(val app: String?, val pkg: String?, val categories: String, val url: String?, val text: String)
 
-    suspend fun markSummaryFailed(id: Long) = withContext(Dispatchers.IO) {
-        db.execSQL("UPDATE shots SET summary_state = ? WHERE id = ?", arrayOf<Any>(SUMMARY_FAILED, id))
-        changed()
-    }
-
-    fun summaryCounts(): SummaryCounts =
-        db.rawQuery(
-            "SELECT SUM(summary_state = ?), SUM(summary_state = ?) FROM shots WHERE state = ?",
-            arrayOf(SUMMARY_DONE.toString(), SUMMARY_PENDING.toString(), IndexState.INDEXED.code.toString()),
-        ).use { c -> if (c.moveToFirst()) SummaryCounts(c.getInt(0), c.getInt(1)) else SummaryCounts(0, 0) }
-
-    fun observeSummaryCounts(): Flow<SummaryCounts> = observe { summaryCounts() }
-
     // ---------------------------------------------------------------- source app
 
-    /** The user picked the app: it's certain from now on, and teaches the guesses for similar screenshots. */
+    /** The user picked the app: it's certain from now on. */
     suspend fun setAppByUser(id: Long, label: String, packageName: String?) = withContext(Dispatchers.IO) {
         setApp(id, label, packageName, "user")
         changed()
     }
 
     private fun setApp(id: Long, label: String, packageName: String?, source: String) {
-        db.execSQL(
-            "UPDATE shots SET summary_state = CASE WHEN summary_state = ? AND (app IS NULL OR app != ?) THEN ? ELSE summary_state END, " +
-                "app = ?, app_package = ?, app_source = ?, app_confidence = NULL WHERE id = ?",
-            arrayOf<Any?>(SUMMARY_DONE, label, SUMMARY_PENDING, label, packageName, source, id),
-        )
+        db.execSQL("UPDATE shots SET app = ?, app_package = ?, app_source = ? WHERE id = ?", arrayOf<Any?>(label, packageName, source, id))
         rewriteFts(id)
     }
 
@@ -614,32 +579,16 @@ class ShotsRepository(private val database: ShotsDatabase) {
         app = getString(8),
         categories = getString(9).split(',').filter { it.isNotEmpty() },
         favorite = getInt(10) == 1,
-        title = getString(11),
-        summarized = getInt(12) == SUMMARY_DONE,
     )
 
     private fun Cursor.shots(): List<Shot> = buildList(count) { while (moveToNext()) add(shot()) }
 
     companion object {
-        const val SUMMARY_PENDING = 0
-        const val SUMMARY_DONE = 1
-        const val SUMMARY_FAILED = 2
+        private const val SHOT_COLUMNS = "id, uri, name, taken_at, width, height, size, state, app, categories, favorite"
+        private const val SHOT_COLUMN_COUNT = 11
 
-        private const val SHOT_COLUMNS = "id, uri, name, taken_at, width, height, size, state, app, categories, favorite, title, summary_state"
-        private const val SHOT_COLUMN_COUNT = 13
-
-        /** Rows whose source app is a guess (or not known at all), not from usage history, file name or the user. */
+        /** Rows whose source app isn't certain (not from usage history, the file name or the user). */
         private const val UNCERTAIN_APP = "(app_source IS NULL OR app_source NOT IN ('usage', 'file', 'user'))"
-
-        private fun occurrences(text: String, term: String): Int {
-            var n = 0
-            var i = text.indexOf(term)
-            while (i >= 0) {
-                n++
-                i = text.indexOf(term, i + term.length)
-            }
-            return n
-        }
 
         fun encodeEntities(entities: List<Entity>): String = JSONArray().apply {
             entities.forEach { e ->

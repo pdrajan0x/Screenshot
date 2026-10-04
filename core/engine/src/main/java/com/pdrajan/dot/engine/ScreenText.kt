@@ -3,38 +3,6 @@ package com.pdrajan.dot.engine
 /** One line of OCR text with its vertical position, as a fraction of the image height (0 = top). */
 data class OcrLine(val text: String, val top: Float, val bottom: Float)
 
-/** What the on-device vision model wrote about a screenshot. */
-data class ScreenshotSummary(
-    val title: String,
-    val summary: String,
-    /** The model's guess at the source app; null when it said "unknown". */
-    val app: String?,
-    val tags: List<String>,
-)
-
-/** Reads the vision model's labelled answer (Title / Summary / App / Keywords) for a screenshot. */
-object SummaryParser {
-
-    private val FIELD = Regex("^\\s*(title|summary|app|tags|keywords)\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)
-    private val NO_APP = setOf("unknown", "none", "n/a", "na", "not known", "unclear", "-")
-
-    fun parse(output: String): ScreenshotSummary? {
-        val fields = HashMap<String, String>()
-        output.lineSequence().forEach { line ->
-            val m = FIELD.find(line) ?: return@forEach
-            fields.putIfAbsent(m.groupValues[1].lowercase(), clean(m.groupValues[2]))
-        }
-        val title = fields["title"].orEmpty()
-        val summary = fields["summary"].orEmpty()
-        if (title.isEmpty() && summary.isEmpty()) return null
-        val app = fields["app"]?.takeIf { it.isNotEmpty() && it.lowercase() !in NO_APP }
-        val tags = VisionPrompts.cleanKeywords((fields["keywords"] ?: fields["tags"]).orEmpty().replace('-', ' '))
-        return ScreenshotSummary(title.take(90), summary.take(400), app?.take(40), tags)
-    }
-
-    private fun clean(s: String) = s.replace("*", "").replace("`", "").trim().trimEnd('.').trim()
-}
-
 /**
  * The page a browser screenshot shows, read from the address bar: the first URL-looking token
  * near the top of the screen.
@@ -73,4 +41,26 @@ object PageLink {
     /** The page a browser screenshot shows, from its stored text (OCR keeps screen order, the address bar first). */
     fun inText(text: String): String? =
         find(text.lineSequence().filter { it.isNotBlank() }.take(4).map { OcrLine(it, 0.05f, 0.08f) }.toList(), browser = true)
+}
+
+/**
+ * A screen's headings: the lines in clearly bigger text than the rest (a page or product title, a
+ * chat's contact name, a post's headline). Search counts a word there more than one in small print.
+ */
+object Headline {
+
+    private val CLOCK = Regex("^\\d{1,2}[.:]\\d{2}(\\s?[ap]\\.?m\\.?)?$", RegexOption.IGNORE_CASE)
+
+    fun from(lines: List<OcrLine>, max: Int = 6): String {
+        val usable = lines.filter { l -> l.bottom > l.top && l.text.count { it.isLetter() } >= 3 && !CLOCK.matches(l.text.trim()) }
+        // Too little text to tell big from normal.
+        if (usable.size < 3) return ""
+        val heights = usable.map { it.bottom - it.top }.sorted()
+        val median = heights[heights.size / 2]
+        return usable.filter { it.bottom - it.top >= median * 1.4f }
+            .sortedByDescending { it.bottom - it.top }
+            .take(max)
+            .sortedBy { it.top }
+            .joinToString("\n") { it.text }
+    }
 }

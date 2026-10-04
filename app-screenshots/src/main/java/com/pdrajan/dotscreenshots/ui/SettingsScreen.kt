@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Storage
@@ -49,9 +50,12 @@ import com.pdrajan.dot.design.SectionLabel
 import com.pdrajan.dot.design.SettingsRow
 import com.pdrajan.dot.design.SettingsSwitchRow
 import com.pdrajan.dot.design.ThemeMode
+import com.pdrajan.dot.media.OldModelFiles
 import com.pdrajan.dotscreenshots.BuildConfig
 import com.pdrajan.dotscreenshots.data.IndexCounts
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,10 +116,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            SectionLabel("AI model", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            AiModelPanel(c)
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
             SectionLabel("Processing", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
             ProcessingSettings(
                 policy = processing,
@@ -148,6 +148,22 @@ fun SettingsScreen(onBack: () -> Unit) {
                 icon = Icons.Rounded.Storage,
                 onClick = {},
             )
+            var oldModels by remember { mutableStateOf(OldModelFiles.found(ctx)) }
+            if (oldModels.isNotEmpty()) {
+                val mb = oldModels.sumOf { runCatching { it.length() }.getOrDefault(0L) } / 1_000_000
+                SettingsRow(
+                    title = "Delete the old AI model",
+                    subtitle = "Earlier versions downloaded it ($mb MB); Dot Screenshots no longer uses it. " +
+                        "Dot Gallery 0.1.29 or older may still use this copy.",
+                    icon = Icons.Rounded.DeleteSweep,
+                    onClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { OldModelFiles.delete(ctx) }
+                            oldModels = OldModelFiles.found(ctx)
+                        }
+                    },
+                )
+            }
             SettingsRow(
                 title = "Diagnostics",
                 subtitle = "See what indexing did, copy the log or save it to Downloads.",

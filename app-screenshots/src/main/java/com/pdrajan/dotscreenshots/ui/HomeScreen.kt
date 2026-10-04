@@ -76,7 +76,6 @@ import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.IndexCounts
 import com.pdrajan.dotscreenshots.data.Shot
 import com.pdrajan.dotscreenshots.data.ShotCollection
-import com.pdrajan.dotscreenshots.data.SummaryCounts
 import com.pdrajan.dotscreenshots.index.IndexProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -100,9 +99,6 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
     val favoriteCount = c.repo.observeFavorites().map { it.size }.stateIn(viewModelScope, started, 0)
     val progress: StateFlow<IndexProgress> = c.engine.progress
     val lastError: StateFlow<String?> = c.engine.lastError
-    val summaryProgress: StateFlow<IndexProgress> = c.summaries.progress
-    val summaryCounts = c.repo.observeSummaryCounts().stateIn(viewModelScope, started, SummaryCounts(0, 0))
-    val aiError: StateFlow<String?> = c.summaries.error
     fun waitingFor(): String? = c.power.blocker() ?: if (!c.power.backlogAllowed()) "older ones are done while charging" else null
     val backlogRunning: StateFlow<Boolean> = c.backlogRunning
     val columns: StateFlow<Int> = c.settings.gridColumns
@@ -188,9 +184,6 @@ fun HomeScreen(
     val favoriteCount by vm.favoriteCount.collectAsStateWithLifecycle()
     val progress by vm.progress.collectAsStateWithLifecycle()
     val lastError by vm.lastError.collectAsStateWithLifecycle()
-    val summaryProgress by vm.summaryProgress.collectAsStateWithLifecycle()
-    val summaryCounts by vm.summaryCounts.collectAsStateWithLifecycle()
-    val aiError by vm.aiError.collectAsStateWithLifecycle()
     var diagnostics by remember { mutableStateOf(false) }
     val backlogRunning by vm.backlogRunning.collectAsStateWithLifecycle()
     val columns by vm.columns.collectAsStateWithLifecycle()
@@ -268,12 +261,9 @@ fun HomeScreen(
                     StatusStrip(
                         progress = progress,
                         counts = counts,
-                        summaries = summaryCounts,
-                        summarising = summaryProgress.running,
-                        preparingAi = summaryProgress.preparing,
                         backlogRunning = backlogRunning,
                         modelAvailable = vm.modelAvailable,
-                        lastError = lastError ?: aiError,
+                        lastError = lastError,
                         waitingFor = vm.waitingFor(),
                         onProcessAll = vm::processAll,
                         onStop = vm::stopProcessing,
@@ -344,9 +334,6 @@ private fun LazyGridScope.fullSpan(key: String, content: @Composable () -> Unit)
 private fun StatusStrip(
     progress: IndexProgress,
     counts: IndexCounts,
-    summaries: SummaryCounts,
-    summarising: Boolean,
-    preparingAi: Boolean,
     backlogRunning: Boolean,
     modelAvailable: Boolean,
     lastError: String?,
@@ -356,20 +343,20 @@ private fun StatusStrip(
     onDetails: () -> Unit,
 ) {
     val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-    val left = counts.pending + summaries.waiting
-    val total = counts.total + summaries.done + summaries.waiting
-    val done = counts.indexed + summaries.done
+    val left = counts.pending
+    val total = counts.total
+    val done = counts.indexed
     val stop: @Composable () -> Unit = { if (backlogRunning) TextButton(onClick = onStop) { Text("Stop", color = DotTheme.extra.accent) } }
     when {
         !modelAvailable -> DotProgressStrip("This build has no image model; only basic listing works.", modifier)
-        progress.preparing || preparingAi -> DotProgressStrip("Preparing the AI model… the first time takes a minute", modifier)
+        progress.preparing -> DotProgressStrip("Getting ready… the first time takes a minute", modifier)
         lastError != null -> DotProgressStrip(
             text = lastError,
             modifier = modifier,
             action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
         )
-        progress.running || summarising -> DotProgressStrip(
-            text = "AI is going through your screenshots · $left left",
+        progress.running -> DotProgressStrip(
+            text = "Reading your screenshots · $left left",
             modifier = modifier,
             progress = if (total > 0) done.toFloat() / total else null,
             action = stop,

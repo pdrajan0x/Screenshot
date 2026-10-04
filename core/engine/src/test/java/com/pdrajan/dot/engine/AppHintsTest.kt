@@ -1,6 +1,7 @@
 package com.pdrajan.dot.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -15,9 +16,24 @@ class AppHintsTest {
     }
 
     @Test
+    fun onlyAClearWinnerNamesTheApp() {
+        // The Reddit screenshot that PixelShot named from its text alone.
+        val reddit = "5:08\nr/TheMentalist\n4x24 - The Crimson Hat\nSeason 5\n6x08 - Red John\nJoin the conversation"
+        assertEquals("Reddit", AppHints.best(reddit))
+        assertEquals("WhatsApp", AppHints.best("Rahul\nonline\nMessages and calls are end-to-end encrypted\nType a message"))
+        assertEquals("WhatsApp", AppHints.best("Chats\nUpdates\nCommunities\nCalls\nArchived"))
+        assertEquals(AppNames.LOCK_SCREEN, AppHints.best("82%\nFriday, 3 October\n7:41"))
+        // A lone ordinary word ("issues", "install", "per/hour") is not enough.
+        assertNull(AppHints.best("Known issues with the update"))
+        assertNull(AppHints.best("₹120 per/hour, install charges extra"))
+        assertNull(AppHints.best(""))
+    }
+
+    @Test
     fun brandsInTheContentAreNoHint() {
         // Amazon results in a Google search, a brand's post in a feed: not the app.
         assertTrue("Amazon" !in AppHints.fromText("Amazon.in · https://www.amazon.in\nBuy 8GB RAM Laptops at Amazon.in"))
         assertTrue(AppHints.fromText("JACK & JONES Slim fit denim jacket\njackjones.in").isEmpty())
+        assertNull(AppHints.best("Amazon.in · https://www.amazon.in\nBuy 8GB RAM Laptops at Amazon.in"))
     }
 }

@@ -25,10 +25,6 @@ data class Shot(
     val app: String?,
     val categories: List<String>,
     val favorite: Boolean,
-    /** Written by the on-device AI model; null until then. */
-    val title: String? = null,
-    /** The AI has summarised it (a tiny red dot on its thumbnail). */
-    val summarized: Boolean = false,
 )
 
 /** Everything the detail screen shows for one screenshot. */
@@ -38,22 +34,16 @@ data class ShotDetail(
     val entities: List<Entity>,
     val note: String,
     val collections: List<ShotCollection>,
-    val summary: String? = null,
-    val tags: List<String> = emptyList(),
+    /** What MobileCLIP sees in the picture ("shoes", "beach"); empty for ordinary app screens. */
+    val keywords: List<String> = emptyList(),
     /** For browser screenshots: the page that was open. */
     val pageUrl: String? = null,
-    /** How the source app was found: file, user or model (older versions: usage, visual, guess). */
+    /** How the source app was found: file, user or visual (the screen's words; older versions: usage, model, guess). */
     val appSource: String? = null,
 ) {
     /** The app isn't certain (not from the file name or the user). */
     val appGuessed: Boolean get() = appSource == null || appSource == "guess" || appSource == "model" || appSource == "visual"
 }
-
-/** Progress of the AI summaries over the library. */
-data class SummaryCounts(val done: Int, val waiting: Int)
-
-/** A screenshot waiting for its summary. */
-data class SummaryJob(val id: Long, val uri: Uri, val app: String?, val text: String, val name: String)
 
 data class ShotCollection(
     val id: Long,

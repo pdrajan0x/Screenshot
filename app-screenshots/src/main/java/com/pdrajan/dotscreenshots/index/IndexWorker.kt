@@ -16,7 +16,7 @@ import java.time.Duration
 /**
  * Background indexing. Two flavours:
  *  - "new": wakes when MediaStore images change (no polling), handles the latest screenshots.
- *  - "backlog": older screenshots and summaries, following Settings → Processing.
+ *  - "backlog": older screenshots, following Settings → Processing.
  */
 class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
@@ -29,7 +29,7 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         runCatching { container.engine.sync() }
 
         // Settings → Processing: background work at all, and on battery only above the chosen level.
-        // Screenshots are finished a few at a time (read, then summary, keywords and app), newest first.
+        // Screenshots are read a few at a time, newest first.
         val power = container.power
         val blocker = power.blocker(foreground = false)
         val stopped = { isStopped || power.blocker(foreground = false) != null }
@@ -43,17 +43,16 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         }
 
         val toRead = container.repo.counts().pending
-        val toSummarise = if (container.summaries.available) container.repo.summaryCounts().waiting else 0
         val scheduler = container.scheduler
         if (mode == MODE_NEW) scheduler.watchForNewScreenshots(afterCurrent = true)
         // Only chain another backlog run when this one got somewhere; a run that did nothing
         // (a persistent error) waits for the next app open or screenshot instead of looping.
-        if ((progressed > 0 || mode == MODE_NEW) && (toRead > 0 || toSummarise > 0) && container.settings.processing.value.background) {
+        if ((progressed > 0 || mode == MODE_NEW) && toRead > 0 && container.settings.processing.value.background) {
             scheduler.scheduleBacklog(afterCurrent = mode == MODE_BACKLOG)
         }
         DotLog.i(
             "worker: $mode run finished · $progressed items moved forward" +
-                (blocker?.let { " (paused: $it)" } ?: "") + " · $toRead to read, $toSummarise to summarise",
+                (blocker?.let { " (paused: $it)" } ?: "") + " · $toRead to read",
         )
         return Result.success()
     }
@@ -88,7 +87,7 @@ class IndexScheduler(private val context: Context, private val chargingOnly: () 
         )
     }
 
-    /** Older screenshots and summaries; waits for the charger unless processing on battery is allowed. */
+    /** Older screenshots; waits for the charger unless processing on battery is allowed. */
     fun scheduleBacklog(afterCurrent: Boolean = false, requireCharging: Boolean = chargingOnly()) {
         val constraints = Constraints.Builder()
             .setRequiresBatteryNotLow(true)

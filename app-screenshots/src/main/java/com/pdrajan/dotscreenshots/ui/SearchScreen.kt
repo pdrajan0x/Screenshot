@@ -35,7 +35,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -51,16 +53,17 @@ import com.pdrajan.dot.design.DotEmptyState
 import com.pdrajan.dot.design.DotLoader
 import com.pdrajan.dot.design.DotSearchField
 import com.pdrajan.dot.design.DotTag
+import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.SectionLabel
 import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.engine.FtsQuery
-import com.pdrajan.dot.engine.HybridRanker
+import com.pdrajan.dot.engine.DateQueryParser
 import com.pdrajan.dot.engine.MatchReason
-import com.pdrajan.dot.engine.RankedResult
 import com.pdrajan.dot.engine.Snippet
 import com.pdrajan.dot.engine.VectorHit
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.data.SearchHit
+import com.pdrajan.dotscreenshots.data.Shot
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,9 +75,14 @@ import kotlinx.coroutines.launch
 
 data class SearchUi(
     val query: String = "",
+    /** The strong matches, best first. */
     val hits: List<SearchHit> = emptyList(),
+    /** Weaker matches (the words only somewhere in the screen text), shown on request. */
+    val more: List<SearchHit> = emptyList(),
     val searching: Boolean = false,
     val visualPending: Boolean = false,
+    /** For a date in the query ("last week"): the range it means. */
+    val dateLabel: String? = null,
 )
 
 class SearchViewModel(private val c: AppContainer) : ViewModel() {
@@ -120,35 +128,57 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    /**
+     * Precise first: a category asked for by name, then screenshots whose app, headings, picture
+     * keywords or note have every word; weaker text matches are kept apart. Look-alike matching
+     * (CLIP) only runs when no words match at all, and keeps just the closest few.
+     */
     private suspend fun run(q: String) {
         _ui.value = _ui.value.copy(searching = true)
-        val text = c.repo.textSearch(q)
-        val categoryIds = Categories.matchQuery(q).flatMap { c.repo.categoryShots(it) }.distinct()
-        publish(q, HybridRanker.merge(text.ids, emptyList(), categoryIds, text.noteIds), visualPending = c.hub.available)
-
-        if (!c.hub.available) return
-        // Look-alike matching only fills in for screenshots the AI hasn't summarised yet; the rest are
-        // found by what was written about them, so "shoes" doesn't bring up every shopping page.
+        val parsed = DateQueryParser().parse(q)
+        val rest = parsed.rest
+        val range = parsed.range
+        fun inRange(shot: Shot) = range == null || shot.takenAt in range.startMillis until range.endMillis
+        if (rest.isBlank()) {
+            val ids = range?.let { c.repo.idsTakenBetween(it.startMillis, it.endMillis) }.orEmpty()
+            publish(q, ids.map { it to setOf(MatchReason.TEXT) }, emptyList(), visualPending = false, range?.label, ::inRange)
+            return
+        }
+        val categoryIds = Categories.matchQuery(rest).flatMap { c.repo.categoryShots(it) }.distinct()
+        val text = c.repo.textSearch(rest, c.hub.words)
+        val best = categoryIds.map { it to setOf(MatchReason.CATEGORY) } + text.best.filter { it !in categoryIds }.map { it to setOf(MatchReason.TEXT) }
+        val more = text.more.filter { it !in categoryIds }.map { it to setOf(MatchReason.TEXT) }
+        val tryVisual = best.isEmpty() && more.isEmpty() && c.hub.available
+        publish(q, best, more, visualPending = tryVisual, range?.label, ::inRange)
+        if (!tryVisual) return
         val visual: List<VectorHit> = runCatching {
             val clip = c.hub.clip() ?: return@runCatching emptyList()
-            val summarized = c.repo.summarizedIds()
-            c.repo.visualSearch(q, clip) { it !in summarized }
+            c.repo.visualSearch(rest, clip)
         }.getOrDefault(emptyList())
-        publish(q, HybridRanker.merge(text.ids, visual, categoryIds, text.noteIds), visualPending = false)
+        publish(q, visual.map { it.id to setOf(MatchReason.VISUAL) }, emptyList(), visualPending = false, range?.label, ::inRange)
     }
 
-    private suspend fun publish(q: String, ranked: List<RankedResult>, visualPending: Boolean) {
-        val ids = ranked.map { it.id }
-        val shots = c.repo.shotsByIds(ids)
-        val texts = c.repo.textsByIds(ranked.filter { MatchReason.TEXT in it.reasons || MatchReason.NOTE in it.reasons }.map { it.id })
-        val terms = FtsQuery.terms(q)
-        val hits = ranked.mapNotNull { r ->
-            val shot = shots[r.id] ?: return@mapNotNull null
-            SearchHit(shot, r.reasons, texts[r.id]?.let { Snippet.around(it, terms) })
+    private suspend fun publish(
+        q: String,
+        best: List<Pair<Long, Set<MatchReason>>>,
+        more: List<Pair<Long, Set<MatchReason>>>,
+        visualPending: Boolean,
+        dateLabel: String?,
+        keep: (Shot) -> Boolean,
+    ) {
+        val all = best + more
+        val shots = c.repo.shotsByIds(all.map { it.first })
+        val texts = c.repo.textsByIds(all.filter { MatchReason.TEXT in it.second }.map { it.first })
+        val terms = FtsQuery.terms(DateQueryParser().parse(q).rest)
+        fun hits(list: List<Pair<Long, Set<MatchReason>>>) = list.mapNotNull { (id, reasons) ->
+            val shot = shots[id]?.takeIf(keep) ?: return@mapNotNull null
+            SearchHit(shot, reasons, texts[id]?.let { Snippet.around(it, terms) })
         }
-        c.lastSearchIds = hits.map { it.shot.id }
+        val strong = hits(best)
+        val weak = hits(more)
+        c.lastSearchIds = (strong + weak).map { it.shot.id }
         if (_ui.value.query == q) {
-            _ui.value = _ui.value.copy(hits = hits, searching = false, visualPending = visualPending)
+            _ui.value = _ui.value.copy(hits = strong, more = weak, searching = false, visualPending = visualPending, dateLabel = dateLabel)
         }
     }
 }
@@ -162,6 +192,7 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
     val categoryCounts by vm.categoryCounts.collectAsStateWithLifecycle()
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    var showMore by remember(ui.query) { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (initialQuery.isNotBlank()) {
@@ -233,7 +264,7 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                         Text(
                             when {
                                 ui.searching && ui.hits.isEmpty() -> "Searching…"
-                                else -> "${ui.hits.size} ${if (ui.hits.size == 1) "result" else "results"}"
+                                else -> "${ui.hits.size} ${if (ui.hits.size == 1) "result" else "results"}" + (ui.dateLabel?.let { " · $it" } ?: "")
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -241,7 +272,7 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                         )
                         if (ui.searching || ui.visualPending) DotLoader()
                     }
-                    if (!ui.searching && !ui.visualPending && ui.hits.isEmpty()) {
+                    if (!ui.searching && !ui.visualPending && ui.hits.isEmpty() && ui.more.isEmpty()) {
                         DotEmptyState(
                             title = "Nothing found",
                             message = "Try other words, or describe what's in the picture — like \"red car\" or \"movie poster\".",
@@ -265,7 +296,8 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                                     )
                                 }
                             }
-                            items(ui.hits, key = { it.shot.id }) { hit ->
+                            val shown = if (showMore) ui.hits + ui.more else ui.hits
+                            items(shown, key = { it.shot.id }) { hit ->
                                 ShotThumb(
                                     shot = hit.shot,
                                     selected = false,
@@ -281,7 +313,7 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                                             MatchReason.VISUAL in hit.reasons -> "visual"
                                             else -> null
                                         }
-                                        hit.shot.title?.let { title ->
+                                        hit.shot.app?.let { title ->
                                             Box(
                                                 Modifier
                                                     .align(Alignment.BottomCenter)
@@ -297,6 +329,16 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                                         }
                                     },
                                 )
+                            }
+                            if (ui.more.isNotEmpty() && !showMore) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    TextButton(onClick = { showMore = true }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                        Text(
+                                            "Show ${ui.more.size} weaker ${if (ui.more.size == 1) "match" else "matches"} (the words appear only in the screen text)",
+                                            color = DotTheme.extra.accent,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

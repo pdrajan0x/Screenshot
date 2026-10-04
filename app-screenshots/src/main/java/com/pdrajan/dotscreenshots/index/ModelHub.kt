@@ -2,6 +2,8 @@ package com.pdrajan.dotscreenshots.index
 
 import android.content.Context
 import com.pdrajan.dot.engine.CategoryClassifier
+import com.pdrajan.dot.engine.PictureTagger
+import com.pdrajan.dot.engine.PictureWords
 import com.pdrajan.dot.ml.ClipModel
 import com.pdrajan.dot.ml.PromptBank
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +26,10 @@ class ModelHub(private val context: Context, private val scope: CoroutineScope) 
     private val mutex = Mutex()
     private var model: ClipModel? = null
     private var classifier: CategoryClassifier? = null
+    private var tagger: PictureTagger? = null
+
+    /** The picture keyword list, for search ("motorcycle" → bike). */
+    val words: PictureWords? by lazy { runCatching { PromptBank.pictureWords(context) }.getOrNull() }
     private var releaseJob: Job? = null
 
     suspend fun clip(): ClipModel? {
@@ -42,6 +48,18 @@ class ModelHub(private val context: Context, private val scope: CoroutineScope) 
             classifier ?: withContext(Dispatchers.Default) { PromptBank.classifier(context, clip) }.also {
                 classifier = it
                 // Prompt embeddings are cached on disk; indexing doesn't need the text encoder after this.
+                clip.releaseText()
+            }
+        }
+    }
+
+    /** Picture keywords for pictures inside screenshots (prompt embeddings cached on disk after the first run). */
+    suspend fun tagger(): PictureTagger? {
+        tagger?.let { return it }
+        val clip = clip() ?: return null
+        return mutex.withLock {
+            tagger ?: withContext(Dispatchers.Default) { PromptBank.pictureTagger(context, clip, forScreenshots = true) }.also {
+                tagger = it
                 clip.releaseText()
             }
         }

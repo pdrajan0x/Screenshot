@@ -44,39 +44,9 @@ jobs:
           path: model-out
           retention-days: 3
 
-  faces:
-    name: Fetch face model
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Restore face model
-        id: cache
-        uses: actions/cache@v4
-        with:
-          path: model-out-faces
-          key: faces-${{ hashFiles('tools/model/export_faces.py') }}
-
-      - if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Download and verify
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          pip install onnx onnxruntime numpy
-          python tools/model/export_faces.py --out model-out-faces
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: faces-model
-          path: model-out-faces
-          retention-days: 3
-
   android:
-    name: Build APKs
-    needs: [model, faces]
+    name: Build APK
+    needs: [model]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,11 +55,6 @@ jobs:
         with:
           name: clip-model
           path: model-out
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: faces-model
-          path: model-out-faces
 
       - uses: actions/setup-java@v4
         with:
@@ -136,15 +101,6 @@ jobs:
             echo "DOT_SIGNING_PASSWORD=$pass"
           } >> "$GITHUB_ENV"
 
-      - name: Cache llama.cpp
-        uses: actions/cache@v4
-        with:
-          path: third_party/llama.cpp
-          key: llama-cpp-${{ hashFiles('tools/fetch_llama.sh') }}
-
-      - name: Fetch llama.cpp
-        run: tools/fetch_llama.sh
-
       - name: Test engine and model parity
         run: ./gradlew :core:engine:test --stacktrace
 
@@ -158,19 +114,12 @@ jobs:
           set -o pipefail
           ./gradlew :app-screenshots:assembleRelease --console=plain 2>&1 | tee -a build.log
 
-      - name: Build Dot Gallery
-        run: |
-          set -o pipefail
-          ./gradlew :app-gallery:assembleRelease --console=plain 2>&1 | tee -a build.log
-
       - name: Collect APKs
         run: |
           mkdir -p dist
           cp app-screenshots/build/outputs/apk/release/*.apk dist/DotScreenshots.apk
-          cp app-gallery/build/outputs/apk/release/*.apk dist/DotGallery.apk
           # R8 mappings, to turn obfuscated stack traces from the phone back into real names.
           cp app-screenshots/build/outputs/mapping/release/mapping.txt dist/DotScreenshots-mapping.txt
-          cp app-gallery/build/outputs/mapping/release/mapping.txt dist/DotGallery-mapping.txt
           ls -la dist
 
       - name: Check ML Kit survived R8
@@ -182,7 +131,7 @@ jobs:
           logger.remove()
           from androguard.misc import AnalyzeAPK
           ok = True
-          for apk in ["dist/DotScreenshots.apk", "dist/DotGallery.apk"]:
+          for apk in ["dist/DotScreenshots.apk"]:
               a, dexes, _ = AnalyzeAPK(apk)
               manifest = a.get_android_manifest_axml().get_xml().decode()
               classes = {c.name: c for d in dexes for c in d.get_classes()}
@@ -224,5 +173,5 @@ jobs:
           gh release create "$tag" dist/*.apk dist/*-mapping.txt \
             --prerelease \
             --target "$GITHUB_SHA" \
-            --title "Dot apps — latest build (${GITHUB_REF_NAME})" \
+            --title "Dot Screenshots — latest build (${GITHUB_REF_NAME})" \
             --notes "Built from ${GITHUB_SHA}. Download the APK on your phone and open it to install or update."
