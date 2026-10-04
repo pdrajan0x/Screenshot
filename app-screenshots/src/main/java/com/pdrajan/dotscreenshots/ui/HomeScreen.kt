@@ -343,9 +343,10 @@ private fun StatusStrip(
     onDetails: () -> Unit,
 ) {
     val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-    val left = counts.pending
+    // Screenshots still to read, plus those whose picture is read again for the newer image model.
+    val left = counts.pending + counts.updating
     val total = counts.total
-    val done = counts.indexed
+    val done = (total - left).coerceAtLeast(0)
     val stop: @Composable () -> Unit = { if (backlogRunning) TextButton(onClick = onStop) { Text("Stop", color = DotTheme.extra.accent) } }
     when {
         !modelAvailable -> DotProgressStrip("This build has no image model; only basic listing works.", modifier)

@@ -7,6 +7,7 @@ import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaAccess
 import com.pdrajan.dot.media.MediaPermissions
 import com.pdrajan.dot.media.MediaStoreSource
+import com.pdrajan.dot.ml.BitmapLoader
 import com.pdrajan.dot.ml.ScreenshotAnalyzer
 import com.pdrajan.dot.ml.TextReader
 import com.pdrajan.dotscreenshots.data.Settings
@@ -169,6 +170,50 @@ class IndexEngine(
         }
         hub.touch()
         DotLog.i("words: updated $done screenshots from stored text and look")
+        done
+    }
+
+    /**
+     * Reads the picture of up to [limit] screenshots indexed with an older image model again (the
+     * text is kept): new embeddings, categories and picture keywords. Returns how many were done.
+     */
+    suspend fun reembed(limit: Int, deadline: Long = Long.MAX_VALUE, isStopped: () -> Boolean = { false }): Int = batchLock.withLock {
+        val jobs = repo.lookQueue(limit)
+        if (jobs.isEmpty()) return 0
+        val clip = hub.clip() ?: return 0
+        val classifier = hub.classifier() ?: return 0
+        val tagger = hub.tagger() ?: return 0
+        _progress.value = IndexProgress(running = true, total = jobs.size)
+        var done = 0
+        try {
+            for (job in jobs) {
+                if (isStopped() || System.currentTimeMillis() > deadline) break
+                currentCoroutineContext().ensureActive()
+                try {
+                    val look = withContext(Dispatchers.Default) {
+                        val bitmap = BitmapLoader.load(context.contentResolver, job.uri)
+                        try {
+                            val crops = clip.embedImage(bitmap, 3)
+                            Triple(crops, classifier.classify(crops, job.text, job.app).categories, tagger.keywords(crops))
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }
+                    repo.saveLook(job.id, look.first, look.second, look.third)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    DotLog.w("look: couldn't read ${job.uri} again: ${e.javaClass.simpleName}: ${e.message}")
+                    repo.skipLook(job.id)
+                }
+                done++
+                _progress.value = IndexProgress(true, done, jobs.size)
+                hub.touch()
+            }
+        } finally {
+            _progress.value = IndexProgress()
+        }
+        DotLog.i("look: read $done pictures again with the current image model")
         done
     }
 

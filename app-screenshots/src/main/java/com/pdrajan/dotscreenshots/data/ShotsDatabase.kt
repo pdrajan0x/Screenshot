@@ -42,7 +42,8 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
                 page_url TEXT,
                 headline TEXT,
                 keywords TEXT NOT NULL DEFAULT '',
-                words_version INTEGER NOT NULL DEFAULT 0
+                words_version INTEGER NOT NULL DEFAULT 0,
+                clip_version INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
         )
@@ -89,6 +90,8 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
             createFts(db)
             db.execSQL("INSERT INTO shots_fts(docid, $FTS_COLUMNS) SELECT id, $FTS_SOURCE FROM shots")
         }
+        // Which image model made a row's embeddings: older ones are read again with the current one.
+        if (oldVersion < 7) db.execSQL("ALTER TABLE shots ADD COLUMN clip_version INTEGER NOT NULL DEFAULT 0")
     }
 
     private fun createFts(db: SQLiteDatabase) {
@@ -97,7 +100,7 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
 
     companion object {
         const val NAME = "shots.db"
-        const val VERSION = 6
+        const val VERSION = 7
 
         /** Full-text columns, and the shots expressions that fill them (same order). */
         const val FTS_COLUMNS = "ocr_text, note, app, headline, keywords"
@@ -112,5 +115,11 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
 
         /** Bump when picture keywords or app words change: stored rows get them again, without re-reading images. */
         const val WORDS_VERSION = 1
+
+        /**
+         * The image model behind the stored embeddings (1 = MobileCLIP2-S0, 2 = MobileCLIP2-S2). Rows
+         * made by an older one are kept out of picture search until their picture is read again.
+         */
+        const val CLIP_VERSION = 2
     }
 }

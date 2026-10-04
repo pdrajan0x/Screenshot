@@ -58,4 +58,5 @@ data class SearchHit(
     val snippet: String?,
 )
 
-data class IndexCounts(val total: Int, val indexed: Int, val pending: Int, val failed: Int)
+/** [updating]: read earlier with an older image model; their picture is read again (while charging). */
+data class IndexCounts(val total: Int, val indexed: Int, val pending: Int, val failed: Int, val updating: Int = 0)

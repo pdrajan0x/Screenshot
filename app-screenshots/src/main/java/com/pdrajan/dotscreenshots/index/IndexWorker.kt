@@ -42,7 +42,8 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             }
         }
 
-        val toRead = container.repo.counts().pending
+        val counts = container.repo.counts()
+        val toRead = counts.pending + counts.updating
         val scheduler = container.scheduler
         if (mode == MODE_NEW) scheduler.watchForNewScreenshots(afterCurrent = true)
         // Only chain another backlog run when this one got somewhere; a run that did nothing

@@ -66,8 +66,9 @@ class PictureWords(val groups: List<Group>, val background: List<String>, val sc
  *
  * A word is kept only when it clearly beats generic "a photo" prompts *and* wins its group by a
  * wide margin (car vs bike vs bus…). The first keyword needs [MIN_LEAD] over the background;
- * any further ones [MIN_LEAD_MORE], so weak extras never ride along. Tuned on labelled photos to
- * prefer no keyword over a wrong one.
+ * any further ones [MIN_LEAD_MORE], so weak extras never ride along. Tuned for MobileCLIP2-S2 on 86
+ * labelled photos (tools/model/compare_clip.py: 71 right, 1 wrong, the rest without a keyword), on a
+ * plateau of the threshold grid rather than its single best cell; app screens get no keywords.
  *
  * @param embeddings one per prompt, in [PictureWords.prompts] order
  */
@@ -120,9 +121,9 @@ class PictureTagger(
     }
 
     companion object {
-        const val MIN_LEAD = 0.03f
-        const val MIN_LEAD_MORE = 0.045f
+        const val MIN_LEAD = 0.01f
+        const val MIN_LEAD_MORE = 0.035f
         const val MIN_LEAD_MULTI = 0.05f
-        const val MIN_SHARE = 0.75f
+        const val MIN_SHARE = 0.7f
     }
 }

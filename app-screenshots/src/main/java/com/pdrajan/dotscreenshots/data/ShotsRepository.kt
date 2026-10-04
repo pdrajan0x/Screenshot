@@ -165,7 +165,11 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 }
             }
         }
-        return IndexCounts(total, indexed, pending, failed)
+        val updating = db.rawQuery(
+            "SELECT COUNT(*) FROM shots WHERE state = ? AND clip_version < ?",
+            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.CLIP_VERSION.toString()),
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+        return IndexCounts(total, indexed, pending, failed, updating)
     }
 
     /** Screenshots indexed while the text model was still downloading. */
@@ -265,7 +269,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val q = clip.embedQuery(query)
         // Screens share a lot of layout, so a merely similar-looking one (a shopping list for "shoes")
         // scores higher than an unrelated photo would: a high bar, and only the closest few.
-        HybridRanker.filterVisual(vectorIndex.search(q, 150, filter), floor = 0.24f, dropFromTop = 0.025f, max = 12)
+        // (MobileCLIP2-S2 scores run ~0.02 above S0's: a photo vs the query naming it, median 0.27.)
+        HybridRanker.filterVisual(vectorIndex.search(q, 150, filter), floor = 0.26f, dropFromTop = 0.025f, max = 12)
     }
 
     suspend fun similar(id: Long, limit: Int = 12): List<Long> = withContext(Dispatchers.Default) {
@@ -279,7 +284,11 @@ class ShotsRepository(private val database: ShotsDatabase) {
             if (vectorsLoaded) return
             withContext(Dispatchers.IO) {
                 val byShot = HashMap<Long, MutableList<QuantizedVector>>()
-                db.rawQuery("SELECT shot_id, vec FROM embeddings ORDER BY shot_id, crop", null).use { c ->
+                // Only embeddings from the current image model: older ones don't compare with its queries.
+                db.rawQuery(
+                    "SELECT e.shot_id, e.vec FROM embeddings e JOIN shots s ON s.id = e.shot_id WHERE s.clip_version = ? ORDER BY e.shot_id, e.crop",
+                    arrayOf(ShotsDatabase.CLIP_VERSION.toString()),
+                ).use { c ->
                     while (c.moveToNext()) byShot.getOrPut(c.getLong(0)) { ArrayList(3) } += QuantizedVector.fromBlob(c.getBlob(1))
                 }
                 byShot.forEach { (id, crops) -> vectorIndex.put(id, crops) }
@@ -377,6 +386,7 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 put("headline", analysis.headline)
                 put("keywords", if (analysis.keywords.isEmpty()) "" else analysis.keywords.joinToString(",", ",", ","))
                 put("words_version", ShotsDatabase.WORDS_VERSION)
+                put("clip_version", ShotsDatabase.CLIP_VERSION)
             }, "id = ?", arrayOf(id.toString()))
             rewriteFts(id)
             db.delete("embeddings", "shot_id = ?", arrayOf(id.toString()))
@@ -489,17 +499,67 @@ class ShotsRepository(private val database: ShotsDatabase) {
     /** A screenshot read by an earlier version: its text and look are stored, so keywords and app need no new reading. */
     class WordsJob(val id: Long, val text: String, val appSource: String?, val crops: List<FloatArray>)
 
+    private class WordsRow(val id: Long, val text: String, val source: String?, val clipVersion: Int)
+
     suspend fun wordsQueue(limit: Int): List<WordsJob> = withContext(Dispatchers.IO) {
         val rows = db.rawQuery(
-            "SELECT id, COALESCE(ocr_text,''), app_source FROM shots WHERE state = ? AND words_version < ? ORDER BY taken_at DESC LIMIT ?",
+            "SELECT id, COALESCE(ocr_text,''), app_source, clip_version FROM shots WHERE state = ? AND words_version < ? ORDER BY taken_at DESC LIMIT ?",
             arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.WORDS_VERSION.toString(), limit.toString()),
-        ).use { c -> buildList { while (c.moveToNext()) add(Triple(c.getLong(0), c.getString(1), c.getString(2))) } }
-        rows.map { (id, text, source) ->
-            val crops = db.rawQuery("SELECT vec FROM embeddings WHERE shot_id = ? ORDER BY crop", arrayOf(id.toString())).use { c ->
-                buildList { while (c.moveToNext()) add(VectorMath.l2Normalize(QuantizedVector.fromBlob(c.getBlob(0)).toFloats())) }
-            }
-            WordsJob(id, text, source, crops)
+        ).use { c -> buildList { while (c.moveToNext()) add(WordsRow(c.getLong(0), c.getString(1), c.getString(2), c.getInt(3))) } }
+        rows.map { row ->
+            // Picture keywords need the current image model's embeddings; older rows get them when re-read.
+            val crops = if (row.clipVersion != ShotsDatabase.CLIP_VERSION) emptyList() else
+                db.rawQuery("SELECT vec FROM embeddings WHERE shot_id = ? ORDER BY crop", arrayOf(row.id.toString())).use { c ->
+                    buildList { while (c.moveToNext()) add(VectorMath.l2Normalize(QuantizedVector.fromBlob(c.getBlob(0)).toFloats())) }
+                }
+            WordsJob(row.id, row.text, row.source, crops)
         }
+    }
+
+    /** A screenshot whose picture was read with an older image model. */
+    class LookJob(val id: Long, val uri: android.net.Uri, val text: String, val app: String?)
+
+    suspend fun lookQueue(limit: Int): List<LookJob> = withContext(Dispatchers.IO) {
+        db.rawQuery(
+            "SELECT id, uri, COALESCE(ocr_text,''), app FROM shots WHERE state = ? AND clip_version < ? ORDER BY taken_at DESC LIMIT ?",
+            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.CLIP_VERSION.toString(), limit.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(LookJob(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getString(3))) } }
+    }
+
+    /** New embeddings from the current image model, with the categories and picture keywords they give. */
+    suspend fun saveLook(id: Long, crops: List<FloatArray>, categories: List<String>, keywords: List<String>) = withContext(Dispatchers.IO) {
+        val quantized = crops.map { QuantizedVector.of(it) }
+        db.beginTransaction()
+        try {
+            db.update("shots", ContentValues().apply {
+                put("categories", if (categories.isEmpty()) "" else categories.joinToString(",", ",", ","))
+                put("keywords", if (keywords.isEmpty()) "" else keywords.joinToString(",", ",", ","))
+                put("clip_version", ShotsDatabase.CLIP_VERSION)
+            }, "id = ?", arrayOf(id.toString()))
+            db.delete("embeddings", "shot_id = ?", arrayOf(id.toString()))
+            quantized.forEachIndexed { i, q ->
+                db.insert("embeddings", null, ContentValues().apply {
+                    put("shot_id", id)
+                    put("crop", i)
+                    put("vec", q.toBlob())
+                })
+            }
+            afterAppKnown(id)
+            rewriteFts(id)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        if (vectorsLoaded) vectorIndex.put(id, quantized)
+        changed()
+    }
+
+    /** The picture couldn't be read again (file gone or broken): stop trying; it stays findable by its text. */
+    suspend fun skipLook(id: Long) = withContext(Dispatchers.IO) {
+        db.execSQL("UPDATE shots SET clip_version = ? WHERE id = ?", arrayOf<Any>(ShotsDatabase.CLIP_VERSION, id))
+        db.delete("embeddings", "shot_id = ?", arrayOf(id.toString()))
+        vectorIndex.remove(id)
+        changed()
     }
 
     /** Saves picture keywords and, unless the app is certain (file name, the user), the app named by the screen's words. */

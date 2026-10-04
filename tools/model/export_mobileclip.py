@@ -1,9 +1,9 @@
-"""Exports MobileCLIP2-S0 to ONNX for the Android apps.
+"""Exports MobileCLIP2-S2 to ONNX for Dot Screenshots.
 
 Run in CI (see .github/workflows/build.yml); needs internet to fetch the weights from Hugging Face.
 
 Outputs, under --out (default: model-out/):
-  assets/clip/image_encoder.onnx  fp32. pixel_values [N,3,256,256] float in [0,1] -> embedding [N,512], L2-normalised
+  assets/clip/image_encoder.onnx  weights stored as fp16, run as fp32. pixel_values [N,3,256,256] float in [0,1] -> embedding [N,512], L2-normalised
   assets/clip/text_encoder.onnx   int8 weights. input_ids [N,77] int64 -> embedding [N,512], L2-normalised
   assets/clip/clip_config.json    preprocessing + tokenizer constants read by the app
   fixtures/clip_fixtures.json     reference outputs for core/engine's ClipModelParityTest
@@ -23,7 +23,9 @@ import open_clip
 import torch
 from onnxruntime.quantization import QuantType, quantize_dynamic
 
-MODEL = "MobileCLIP2-S0"
+# S2 over S0: on 86 labelled photos the app's keyword rule got 71 right (1 wrong) vs 62 (1 wrong),
+# for ~2.6x the image time; B got 72 for another ~2.8x (tools/model/compare_clip.py).
+MODEL = "MobileCLIP2-S2"
 PRETRAINED = "dfndr2b"
 
 PARITY_TEXTS = [
@@ -68,13 +70,19 @@ class TextEncoder(torch.nn.Module):
         return l2_normalize(self.model.encode_text(input_ids))
 
 
-def synthetic_image(size):
-    """Deterministic RGB pattern; core/engine's parity test draws the same pixels."""
+def synthetic_image(size, seed=0):
+    """Deterministic RGB pattern; core/engine's parity test draws the same pixels (seed 0).
+    Other seeds add smooth noise, for checking an export on more than one picture."""
     y, x = np.mgrid[0:size, 0:size]
     r = x * 255 // (size - 1)
     g = y * 255 // (size - 1)
     b = ((x // 16 + y // 16) % 2) * 200 + 27
-    return np.stack([r, g, b], axis=0).astype(np.float32) / 255.0  # CHW in [0,1]
+    img = np.stack([r, g, b], axis=0).astype(np.float32) / 255.0  # CHW in [0,1]
+    if seed:
+        rng = np.random.default_rng(seed)
+        noise = rng.random((3, size // 16, size // 16)).astype(np.float32)
+        img = np.clip(0.5 * img + 0.5 * noise.repeat(16, axis=1).repeat(16, axis=2), 0, 1)
+    return img
 
 
 def cosine(a, b):
@@ -174,6 +182,20 @@ def main():
             break
     assert chosen_image, "no image export variant matched PyTorch"
     print("chosen image variant:", chosen_image)
+    # Store the weights as fp16 (half the APK size); ORT folds the casts back to fp32 when the
+    # session is created, so the arithmetic is unchanged. Kept only if it still matches PyTorch.
+    half_path = os.path.join(work, "image-fp16-weights.onnx")
+    try:
+        fp16_weights(chosen_image[1], half_path)
+        checks = [synthetic_image(config["image_size"], seed) for seed in range(4)]
+        with torch.no_grad():
+            refs = [ImageEncoder(model)(torch.from_numpy(x)[None]).numpy()[0] for x in checks]
+        c = min(cosine(r, ort_run(half_path, {"pixel_values": x[None]}, chosen_image[2])[0]) for r, x in zip(refs, checks))
+        print(f"image fp16 weights: min cos={c:.6f} size={os.path.getsize(half_path) / 1e6:.1f} MB")
+        if c > 0.999:
+            chosen_image = (chosen_image[0] + "+fp16-weights", half_path, chosen_image[2])
+    except Exception as e:  # noqa: BLE001
+        print(f"image fp16 weights: failed: {type(e).__name__}: {e}"[:400])
     image_out = os.path.join(clip_dir, "image_encoder.onnx")
     shutil.copy(chosen_image[1], image_out)
 
@@ -272,6 +294,29 @@ def main():
     shutil.rmtree(work)
     for name in sorted(os.listdir(clip_dir)):
         print(f"{name}: {os.path.getsize(os.path.join(clip_dir, name)) / 1e6:.1f} MB")
+
+
+def fp16_weights(src, dst, min_elements=1024):
+    """Large fp32 weights stored as fp16, each behind a Cast back to fp32 (constant-folded by ORT)."""
+    from onnx import TensorProto, helper, numpy_helper
+
+    m = onnx.load(src)
+    g = m.graph
+    inputs = {i.name for i in g.input}
+    halves, casts = [], []
+    for init in list(g.initializer):
+        if init.data_type != TensorProto.FLOAT or int(np.prod(init.dims)) < min_elements or init.name in inputs:
+            continue
+        half = numpy_helper.from_array(numpy_helper.to_array(init).astype(np.float16), init.name + "__fp16")
+        g.initializer.remove(init)
+        halves.append(half)
+        casts.append(helper.make_node("Cast", [half.name], [init.name], to=TensorProto.FLOAT, name=init.name + "__cast"))
+    g.initializer.extend(halves)
+    nodes = list(g.node)
+    del g.node[:]
+    g.node.extend(casts + nodes)
+    onnx.checker.check_model(m)
+    onnx.save(m, dst)
 
 
 def nbits_quantize(src, dst, bits, ops):
