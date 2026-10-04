@@ -61,4 +61,8 @@ data class SearchHit(
 )
 
 /** [updating]: read but not finished: not described yet, or their picture is read again for the newer image model. */
-data class IndexCounts(val total: Int, val indexed: Int, val pending: Int, val failed: Int, val updating: Int = 0)
+/**
+ * [updating]: read but not described yet. [withoutText]: read without their words (the text model
+ * wasn't available); they're read again once it is.
+ */
+data class IndexCounts(val total: Int, val indexed: Int, val pending: Int, val failed: Int, val updating: Int = 0, val withoutText: Int = 0)

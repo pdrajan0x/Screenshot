@@ -163,19 +163,22 @@ class ShotsRepository(private val database: ShotsDatabase) {
             }
         }
         val updating = db.rawQuery(
-            "SELECT COUNT(*) FROM shots WHERE state = ? AND describe_version < ? AND ocr_pending = 0",
+            "SELECT COUNT(*) FROM shots WHERE state = ? AND describe_version < ?",
             arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.DESCRIBE_VERSION.toString()),
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
-        return IndexCounts(total, indexed, pending, failed, updating)
+        return IndexCounts(total, indexed, pending, failed, updating, ocrPendingCount())
     }
 
     /** Screenshots indexed while the text model was still downloading. */
     fun ocrPendingCount(): Int =
         db.rawQuery("SELECT COUNT(*) FROM shots WHERE ocr_pending = 1", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
-    /** Queues those screenshots again now that text can be read. */
+    /**
+     * Queues those screenshots again now that text can be read; they're described again too, as
+     * their description was checked against no words at all.
+     */
     suspend fun requeueOcrPending(): Int = withContext(Dispatchers.IO) {
-        val n = db.compileStatement("UPDATE shots SET state = ${IndexState.PENDING.code}, ocr_pending = 0 WHERE ocr_pending = 1")
+        val n = db.compileStatement("UPDATE shots SET state = ${IndexState.PENDING.code}, ocr_pending = 0, describe_version = 0 WHERE ocr_pending = 1")
             .use { it.executeUpdateDelete() }
         if (n > 0) changed()
         n
@@ -452,8 +455,9 @@ class ShotsRepository(private val database: ShotsDatabase) {
     /** Read screenshots not described yet by the current model, newest first ([since]: taken from then on). */
     suspend fun describeQueue(limit: Int, since: Long = 0L): List<DescribeJob> = withContext(Dispatchers.IO) {
         db.rawQuery(
-            // Not before its text is read: the description is checked against it.
-            "SELECT id, uri, COALESCE(ocr_text,''), app FROM shots WHERE state = ? AND describe_version < ? AND ocr_pending = 0 AND taken_at >= ? ORDER BY taken_at DESC LIMIT ?",
+            // Read ones only (the description is checked against their words); without the text model
+            // they're read without words, and described anyway rather than never.
+            "SELECT id, uri, COALESCE(ocr_text,''), app FROM shots WHERE state = ? AND describe_version < ? AND taken_at >= ? ORDER BY taken_at DESC LIMIT ?",
             arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.DESCRIBE_VERSION.toString(), since.toString(), limit.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(DescribeJob(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getString(3))) } }
     }

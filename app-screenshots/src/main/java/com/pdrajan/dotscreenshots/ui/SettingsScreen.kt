@@ -281,6 +281,7 @@ private sealed class Status(val kind: String) {
     data class Working(val reading: Boolean, val left: Int, val fraction: Float?) : Status(if (reading) "reading" else "describing")
     data class Error(val message: String) : Status("error")
     data class Waiting(val left: Int, val reason: String?) : Status("waiting")
+    data class NoText(val count: Int) : Status("no-text")
     data object Idle : Status("idle")
 }
 
@@ -307,6 +308,8 @@ private fun StatusStrip(c: AppContainer, onDetails: () -> Unit) {
             counts.pending + toDescribe,
             c.power.blocker() ?: if (!c.power.backlogAllowed()) "older ones are done while charging" else null,
         )
+        // Not an error the user can fix here, but they should know why words aren't found.
+        counts.withoutText > 0 && text is TextModelState.Unavailable -> Status.NoText(counts.withoutText)
         else -> Status.Idle
     }
     val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -337,6 +340,11 @@ private fun StatusStrip(c: AppContainer, onDetails: () -> Unit) {
                 text = "${s.left} screenshots waiting" + (s.reason?.let { " · $it" } ?: ""),
                 modifier = modifier,
                 action = { TextButton(onClick = c::processAllNow) { Text("Do it now", color = DotTheme.extra.accent) } },
+            )
+            is Status.NoText -> DotProgressStrip(
+                text = "Google Play services couldn't get the text reader: ${s.count} screenshots are searchable by their " +
+                    "description only. They're read again when it's available.",
+                modifier = modifier,
             )
             Status.Idle -> Spacer(Modifier.height(0.dp))
         }

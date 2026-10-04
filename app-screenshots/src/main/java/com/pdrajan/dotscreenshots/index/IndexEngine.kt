@@ -90,12 +90,14 @@ class IndexEngine(
             val batchStart = System.currentTimeMillis()
             var reader: TextReader? = null
             try {
-                val textReader = if (gate == TextGate.WITHOUT) null else runCatching { TextReader(hindi = settings.readHindi.value) }
+                // Even when Play services says the model isn't available the reader is tried: a
+                // screenshot it can't read is kept as "without text" and read again later.
+                val textReader = runCatching { TextReader(hindi = settings.readHindi.value) }
                     .onFailure { DotLog.e("process: text recognizer unavailable; indexing without text for now", it) }
                     .getOrNull()
                 reader = textReader
                 // Screenshots indexed without text (the model wasn't available then) are read again now.
-                if (textReader != null && repo.ocrPendingCount() > 0) {
+                if (gate == TextGate.READY && textReader != null && repo.ocrPendingCount() > 0) {
                     DotLog.i("process: text model ready; re-reading ${repo.requeueOcrPending()} screenshots")
                 }
                 val pending = repo.pending(limit, since)
