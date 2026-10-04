@@ -139,6 +139,10 @@ def main():
         torch_txt = TextEncoder(model)(tokens).numpy()
         traced = torch.jit.trace(ImageEncoder(model), example_image)
         traced_img = traced(example_image).numpy()[0]
+        # Reference outputs for more pictures, taken now: after torch.onnx.export the in-memory
+        # model's outputs no longer match (the exported graph does, see the checks below).
+        checks = [synthetic_image(config["image_size"], seed) for seed in range(4)]
+        check_refs = [ImageEncoder(model)(torch.from_numpy(x)[None]).numpy()[0] for x in checks]
     print(f"diag: reparam vs original torch cos={cosine(torch_img, torch_img_raw):.6f}")
     print(f"diag: jit.trace vs eager cos={cosine(torch_img, traced_img):.6f}")
 
@@ -187,15 +191,13 @@ def main():
     half_path = os.path.join(work, "image-fp16-weights.onnx")
     try:
         fp16_weights(chosen_image[1], half_path)
-        checks = [synthetic_image(config["image_size"], seed) for seed in range(4)]
-        with torch.no_grad():
-            refs = [ImageEncoder(model)(torch.from_numpy(x)[None]).numpy()[0] for x in checks]
-        full = [cosine(r, ort_run(chosen_image[1], {"pixel_values": x[None]}, chosen_image[2])[0]) for r, x in zip(refs, checks)]
-        half = [cosine(r, ort_run(half_path, {"pixel_values": x[None]}, chosen_image[2])[0]) for r, x in zip(refs, checks)]
+        full = [cosine(r, ort_run(chosen_image[1], {"pixel_values": x[None]}, chosen_image[2])[0]) for r, x in zip(check_refs, checks)]
+        half = [cosine(r, ort_run(half_path, {"pixel_values": x[None]}, chosen_image[2])[0]) for r, x in zip(check_refs, checks)]
         print("image fp32 export vs torch per picture:", [round(v, 6) for v in full])
         print("image fp16 weights vs torch per picture:", [round(v, 6) for v in half])
         c = min(half)
         print(f"image fp16 weights: min cos={c:.6f} size={os.path.getsize(half_path) / 1e6:.1f} MB")
+        assert min(full) > 0.999, "the fp32 image export doesn't match PyTorch on every check picture"
         if c > 0.999:
             chosen_image = (chosen_image[0] + "+fp16-weights", half_path, chosen_image[2])
     except Exception as e:  # noqa: BLE001
