@@ -1,0 +1,27 @@
+name: Compare CLIP models
+
+on:
+  push:
+    paths:
+      - tools/model/compare_clip.py
+      - tools/model/eval/photos.json
+      - .github/workflows/compare-clip.yml
+  workflow_dispatch:
+
+jobs:
+  compare:
+    name: MobileCLIP2 S0 vs S2 vs B on picture keywords
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compare
+        run: |
+          pip install -r tools/model/requirements.txt pillow
+          python tools/model/compare_clip.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clip-comparison
+          path: tools/model/eval/report.txt
