@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   model:
-    name: Export MobileCLIP2-S0
+    name: Export MobileCLIP2-S2
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -190,7 +190,11 @@ def main():
         checks = [synthetic_image(config["image_size"], seed) for seed in range(4)]
         with torch.no_grad():
             refs = [ImageEncoder(model)(torch.from_numpy(x)[None]).numpy()[0] for x in checks]
-        c = min(cosine(r, ort_run(half_path, {"pixel_values": x[None]}, chosen_image[2])[0]) for r, x in zip(refs, checks))
+        full = [cosine(r, ort_run(chosen_image[1], {"pixel_values": x[None]}, chosen_image[2])[0]) for r, x in zip(refs, checks)]
+        half = [cosine(r, ort_run(half_path, {"pixel_values": x[None]}, chosen_image[2])[0]) for r, x in zip(refs, checks)]
+        print("image fp32 export vs torch per picture:", [round(v, 6) for v in full])
+        print("image fp16 weights vs torch per picture:", [round(v, 6) for v in half])
+        c = min(half)
         print(f"image fp16 weights: min cos={c:.6f} size={os.path.getsize(half_path) / 1e6:.1f} MB")
         if c > 0.999:
             chosen_image = (chosen_image[0] + "+fp16-weights", half_path, chosen_image[2])
@@ -296,18 +300,25 @@ def main():
         print(f"{name}: {os.path.getsize(os.path.join(clip_dir, name)) / 1e6:.1f} MB")
 
 
-def fp16_weights(src, dst, min_elements=1024):
-    """Large fp32 weights stored as fp16, each behind a Cast back to fp32 (constant-folded by ORT)."""
+def fp16_weights(src, dst, min_elements=1024, max_rel_error=1e-3):
+    """Large fp32 weights stored as fp16, each behind a Cast back to fp32 (constant-folded by ORT).
+    A tensor fp16 can't hold faithfully (out of range, or tiny values that underflow) stays fp32."""
     from onnx import TensorProto, helper, numpy_helper
 
     m = onnx.load(src)
     g = m.graph
     inputs = {i.name for i in g.input}
-    halves, casts = [], []
+    halves, casts, kept = [], [], []
     for init in list(g.initializer):
         if init.data_type != TensorProto.FLOAT or int(np.prod(init.dims)) < min_elements or init.name in inputs:
             continue
-        half = numpy_helper.from_array(numpy_helper.to_array(init).astype(np.float16), init.name + "__fp16")
+        w = numpy_helper.to_array(init)
+        h = w.astype(np.float16)
+        err = float(np.linalg.norm(w - h.astype(np.float32)) / (np.linalg.norm(w) + 1e-12))
+        if not np.all(np.isfinite(h)) or err > max_rel_error:
+            kept.append((init.name, err, float(np.abs(w).max())))
+            continue
+        half = numpy_helper.from_array(h, init.name + "__fp16")
         g.initializer.remove(init)
         halves.append(half)
         casts.append(helper.make_node("Cast", [half.name], [init.name], to=TensorProto.FLOAT, name=init.name + "__cast"))
@@ -317,6 +328,7 @@ def fp16_weights(src, dst, min_elements=1024):
     g.node.extend(casts + nodes)
     onnx.checker.check_model(m)
     onnx.save(m, dst)
+    print(f"fp16 weights: {len(halves)} tensors halved, {len(kept)} kept fp32 " + str([(n[:40], round(e, 4), round(a, 1)) for n, e, a in kept[:8]]))
 
 
 def nbits_quantize(src, dst, bits, ops):
