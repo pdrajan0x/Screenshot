@@ -86,8 +86,17 @@ def save(name):
     print("saved", path)
 
 
+def dismiss_dialogs():
+    """System popups ("… isn't responding") would end up in the sample screenshots."""
+    nodes = ui_nodes()
+    if any("isn't responding" in (n.get("text") or "") for n in nodes):
+        tap("Wait", exact=True, required=False)
+        wait(2)
+
+
 def system_screenshot():
     """A real screenshot, the way the phone takes one (lands in Pictures/Screenshots)."""
+    dismiss_dialogs()
     sh("input keyevent 120")
     wait(4)
 
@@ -106,6 +115,10 @@ def demo_status_bar():
 
 def fill_library():
     """About a dozen ordinary screenshots for the app to read."""
+    # No error popups, no Chrome notification prompt, and a few quiet seconds after boot.
+    sh("settings put global hide_error_dialogs 1")
+    sh("pm grant com.android.chrome android.permission.POST_NOTIFICATIONS")
+    wait(45)
     pages = [
         "android.settings.WIFI_SETTINGS",
         "android.settings.DISPLAY_SETTINGS",
@@ -251,7 +264,8 @@ def main():
         sh(f"input tap {w // 6} {h // 2}")
     wait(4)
     save("viewer")
-    sh(f"input swipe {w // 2} {int(h * 0.8)} {w // 2} {int(h * 0.25)} 400")
+    if not tap("Details", exact=True, required=False):
+        sh(f"input swipe {w // 2} {int(h * 0.8)} {w // 2} {int(h * 0.25)} 400")
     wait(3)
     save("details")
     # Further down: the keywords, opened.
