@@ -32,10 +32,13 @@ def wait(seconds):
 
 def ui_nodes():
     for _ in range(3):
-        sh("uiautomator dump /sdcard/ui.xml >/dev/null 2>&1")
-        xml = sh("cat /sdcard/ui.xml")
+        # A failed dump would otherwise leave the previous screen's file behind.
+        sh("rm -f /sdcard/ui.xml")
+        out = sh("uiautomator dump /sdcard/ui.xml 2>&1")
+        xml = sh("cat /sdcard/ui.xml 2>/dev/null")
         if xml.strip().startswith("<?xml"):
             return list(ET.fromstring(xml).iter("node"))
+        print("!! couldn't read the screen:", out.strip()[:120], flush=True)
         wait(1)
     return []
 
@@ -174,6 +177,7 @@ def wait_until_read(max_minutes=40):
     open_settings()
     deadline = time.time() + max_minutes * 60
     reports = 0
+    misses = 0
     while time.time() < deadline:
         if not in_front():
             print("!! the app isn't in front", flush=True)
@@ -182,6 +186,13 @@ def wait_until_read(max_minutes=40):
                 reports += 1
             open_settings()
         texts = [n.get("text") or "" for n in ui_nodes()]
+        if not any("screenshots searchable" in t for t in texts):
+            misses += 1
+            print(f"!! not on Settings (seen: {[t for t in texts if t][:6]})", flush=True)
+            if misses % 3 == 0:
+                sh("input keyevent 4")
+                wait(2)
+                open_settings()
         busy = [t for t in texts if " left" in t or "waiting" in t]
         for t in texts:
             m = re.search(r"(\d+) of (\d+) screenshots searchable", t)
@@ -197,7 +208,10 @@ def wait_until_read(max_minutes=40):
 
 def main():
     adb("wait-for-device")
-    sh("settings put global window_animation_scale 0.5")
+    # No animations: uiautomator can't read a screen that never settles (pulsing dots, loaders).
+    for key in ["window_animation_scale", "transition_animation_scale", "animator_duration_scale"]:
+        sh(f"settings put global {key} 0")
+    adb("logcat", "-G", "16M")
     sh("cmd uimode night yes")
     demo_status_bar()
     fill_library()
