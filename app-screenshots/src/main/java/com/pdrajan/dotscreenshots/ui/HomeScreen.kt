@@ -304,7 +304,14 @@ fun HomeScreen(
                     glass = glass,
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
                 )
-                DateScrubber(gridState, marks, Modifier.align(Alignment.CenterEnd), bottomInset = searchSpace)
+                // Its highest position stays clear of the title row (Select and Settings buttons).
+                DateScrubber(
+                    gridState,
+                    marks,
+                    Modifier.align(Alignment.CenterEnd),
+                    topInset = padding.calculateTopPadding() + 88.dp,
+                    bottomInset = searchSpace,
+                )
             }
         }
     }

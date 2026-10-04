@@ -3,7 +3,6 @@ package com.pdrajan.dot.ml
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
-import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -14,19 +13,17 @@ import com.pdrajan.dot.engine.FlorenceText
 import com.pdrajan.dot.engine.ImageDescription
 import com.pdrajan.dot.engine.PixelPreprocess
 import java.io.Closeable
-import java.io.FileInputStream
-import java.nio.ByteBuffer
-import java.nio.channels.FileChannel
+import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Describes a screenshot with Florence-2-base (assets/florence, from tools/model/fetch_florence.py):
- * what's in its pictures and the objects it sees, checked against the screen's text
- * ([FlorenceText]). Sessions load on first use from the uncompressed APK assets.
+ * Describes a screenshot with Florence-2-base: what's in its pictures and the objects it sees,
+ * checked against the screen's text ([FlorenceText]). The config ships in the APK
+ * (assets/florence); the model files are downloaded after install into [dir].
  */
 class FlorenceDescriber private constructor(
-    private val assets: AssetManager,
+    private val dir: File,
     val config: FlorenceConfig,
     private val threads: Int,
 ) : Closeable {
@@ -37,7 +34,7 @@ class FlorenceDescriber private constructor(
     @Synchronized
     private fun model(): FlorenceModel = model ?: run {
         fun session(name: String) = env.createSession(
-            map("florence/$name"),
+            File(dir, name).absolutePath,
             OrtSession.SessionOptions().apply {
                 setIntraOpNumThreads(threads)
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -47,11 +44,6 @@ class FlorenceDescriber private constructor(
         )
         FlorenceModel(env, session("vision_encoder.onnx"), session("embed_tokens.onnx"), session("encoder_model.onnx"), session("decoder_model.onnx"), config)
     }.also { model = it }
-
-    private fun map(name: String): ByteBuffer =
-        assets.openFd(name).use { fd ->
-            FileInputStream(fd.fileDescriptor).use { it.channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.length) }
-        }
 
     /** Blocking; call from a background thread. [screenText] is what OCR read, to check quotes against. */
     fun describe(bitmap: Bitmap, screenText: String): ImageDescription {
@@ -87,14 +79,16 @@ class FlorenceDescriber private constructor(
     }
 
     companion object {
-        fun isAvailable(context: Context): Boolean =
-            runCatching { context.assets.openFd("florence/vision_encoder.onnx").close(); true }.getOrDefault(false)
+        /** The shipped config (prompts, tokens and the files to download). */
+        fun config(context: Context, withTokens: Boolean = true): FlorenceConfig {
+            fun text(name: String) = context.assets.open("florence/$name").bufferedReader().use { it.readText() }
+            return FlorenceConfig.parse(text("florence_config.json"), if (withTokens) text("tokens.json") else "[]")
+        }
 
-        fun load(context: Context): FlorenceDescriber {
-            val assets = context.assets
-            fun text(name: String) = assets.open("florence/$name").bufferedReader().use { it.readText() }
+        /** [dir]: where the downloaded, checked model files are. */
+        fun load(context: Context, dir: File): FlorenceDescriber {
             val cores = Runtime.getRuntime().availableProcessors()
-            return FlorenceDescriber(assets, FlorenceConfig.parse(text("florence_config.json"), text("tokens.json")), threads = max(1, min(4, cores / 2)))
+            return FlorenceDescriber(dir, config(context), threads = max(1, min(4, cores / 2)))
         }
 
         private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)

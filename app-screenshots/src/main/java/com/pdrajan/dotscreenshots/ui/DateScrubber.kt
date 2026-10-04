@@ -64,6 +64,8 @@ fun DateScrubber(
     gridState: LazyGridState,
     marks: List<ScrubMark>,
     modifier: Modifier = Modifier,
+    /** Space kept free at the top (status bar and the title row with its buttons). */
+    topInset: androidx.compose.ui.unit.Dp = 72.dp,
     /** Space kept free at the bottom (the floating search bar). */
     bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
@@ -94,7 +96,7 @@ fun DateScrubber(
     }
     LaunchedEffect(label) { if (dragging) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
 
-    BoxWithConstraints(modifier.fillMaxHeight().width(160.dp).padding(top = 72.dp, bottom = bottomInset)) {
+    BoxWithConstraints(modifier.fillMaxHeight().width(160.dp).padding(top = topInset, bottom = bottomInset)) {
         val density = LocalDensity.current
         val handleHeight = 48.dp
         val trackPx = with(density) { (maxHeight - handleHeight).toPx() }.coerceAtLeast(1f)

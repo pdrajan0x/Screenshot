@@ -1,9 +1,7 @@
 package com.pdrajan.dot.engine
 
 /** Why a result matched; shown as a small badge in the UI. */
-enum class MatchReason { TEXT, VISUAL, CATEGORY, NOTE }
-
-data class RankedResult(val id: Long, val score: Float, val reasons: Set<MatchReason>)
+enum class MatchReason { TEXT, CATEGORY, NOTE }
 
 object FtsQuery {
     private val WORD = Regex("[\\p{L}\\p{M}\\p{N}]+")
@@ -56,49 +54,6 @@ object FtsQuery {
             val prefix = allTermsPrefix || i == t.lastIndex
             if (prefix) "$term*" else term
         }.joinToString(" ")
-    }
-}
-
-object HybridRanker {
-    private const val K = 60f
-
-    /**
-     * Reciprocal-rank fusion of the three result lists. Items found by more than one signal rise
-     * to the top; within a list, order is preserved.
-     *
-     * @param visual similarity hits, already filtered with [filterVisual]
-     */
-    fun merge(
-        text: List<Long>,
-        visual: List<VectorHit>,
-        category: List<Long>,
-        notes: List<Long> = emptyList(),
-    ): List<RankedResult> {
-        val scores = HashMap<Long, Float>()
-        val reasons = HashMap<Long, MutableSet<MatchReason>>()
-        fun add(ids: List<Long>, weight: Float, reason: MatchReason) {
-            ids.forEachIndexed { rank, id ->
-                scores[id] = (scores[id] ?: 0f) + weight / (K + rank + 1)
-                reasons.getOrPut(id) { mutableSetOf() }.add(reason)
-            }
-        }
-        add(notes, 1.3f, MatchReason.NOTE)
-        add(text, 1.2f, MatchReason.TEXT)
-        add(category, 1.0f, MatchReason.CATEGORY)
-        add(visual.map { it.id }, 1.0f, MatchReason.VISUAL)
-        return scores.entries
-            .sortedByDescending { it.value }
-            .map { (id, s) -> RankedResult(id, s, reasons.getValue(id)) }
-    }
-
-    /**
-     * CLIP always returns *something*. Keep hits that clear an absolute floor and stay close to
-     * the best match, so a query with no real visual match returns nothing visual.
-     */
-    fun filterVisual(hits: List<VectorHit>, floor: Float = 0.18f, dropFromTop: Float = 0.06f, max: Int = 60): List<VectorHit> {
-        val top = hits.firstOrNull()?.score ?: return emptyList()
-        if (top < floor) return emptyList()
-        return hits.filter { it.score >= floor && it.score >= top - dropFromTop }.take(max)
     }
 }
 

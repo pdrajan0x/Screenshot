@@ -15,14 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The models, as exported by the Build workflow (same cache key).
-      - name: Restore exported models
-        uses: actions/cache/restore@v4
-        with:
-          path: model-out
-          key: models-${{ hashFiles('tools/model/export_mobileclip.py', 'tools/model/fetch_florence.py', 'tools/model/requirements.txt') }}
-          fail-on-cache-miss: true
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

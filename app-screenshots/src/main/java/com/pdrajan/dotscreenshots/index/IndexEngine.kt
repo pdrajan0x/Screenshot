@@ -1,8 +1,8 @@
 package com.pdrajan.dotscreenshots.index
 
 import android.content.Context
-import com.pdrajan.dot.engine.AppHints
 import com.pdrajan.dot.engine.AppNames
+import com.pdrajan.dot.engine.CategoryClassifier
 import com.pdrajan.dot.media.DotLog
 import com.pdrajan.dot.media.MediaAccess
 import com.pdrajan.dot.media.MediaPermissions
@@ -23,8 +23,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** [preparing]: models are loading (the first run also embeds the category prompts). */
-data class IndexProgress(val running: Boolean = false, val done: Int = 0, val total: Int = 0, val preparing: Boolean = false)
+data class IndexProgress(val running: Boolean = false, val done: Int = 0, val total: Int = 0)
 
 /** Syncs MediaStore → database and analyses pending screenshots, one batch at a time. */
 class IndexEngine(
@@ -89,20 +88,7 @@ class IndexEngine(
                 val pending = repo.pending(limit, since)
                 if (pending.isEmpty()) return 0
                 DotLog.i("process: ${pending.size} pending in this batch")
-                _progress.value = IndexProgress(running = true, total = pending.size, preparing = true)
-                var t = System.currentTimeMillis()
-                val clip = hub.clip()
-                if (clip == null) {
-                    DotLog.e("process: CLIP model missing from the APK")
-                    _lastError.value = "Image model missing from this build"
-                    return 0
-                }
-                DotLog.i("process: CLIP ready in ${System.currentTimeMillis() - t} ms")
-                t = System.currentTimeMillis()
-                val classifier = hub.classifier() ?: return 0
-                val tagger = hub.tagger() ?: return 0
-                DotLog.i("process: category and keyword prompts ready in ${System.currentTimeMillis() - t} ms")
-                val analyzer = ScreenshotAnalyzer(context, clip, textReader, classifier, tagger, installed())
+                val analyzer = ScreenshotAnalyzer(context, textReader, installed())
                 _progress.value = IndexProgress(running = true, total = pending.size)
                 var noText = 0
                 for (item in pending) {
@@ -116,7 +102,6 @@ class IndexEngine(
                         repo.saveAnalysis(item.id, analysis)
                         recordTime(analysis.durationMs)
                         if (analysis.ocrPending) noText++
-                        if (done == 0) DotLog.i("process: first screenshot took ${analysis.durationMs} ms (includes loading the image model)")
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
@@ -150,74 +135,6 @@ class IndexEngine(
         }
 
     /**
-     * Brings screenshots read by an earlier version up to date: picture keywords from their stored
-     * look, the app from their stored text. No image is opened, so it is quick and light; returns
-     * how many were updated.
-     */
-    suspend fun refreshWords(limit: Int): Int = batchLock.withLock {
-        val jobs = repo.wordsQueue(limit)
-        if (jobs.isEmpty()) return 0
-        val tagger = hub.tagger() ?: return 0
-        val apps = installed()
-        var done = 0
-        for (job in jobs) {
-            currentCoroutineContext().ensureActive()
-            val keywords = if (job.crops.isEmpty()) emptyList() else tagger.keywords(job.crops)
-            val name = AppHints.best(job.text)
-            val app = name?.let { AppNames.match(it, apps) ?: AppNames.Choice(it, null) }
-            repo.saveWords(job.id, keywords, app?.label, app?.packageName)
-            done++
-        }
-        hub.touch()
-        DotLog.i("words: updated $done screenshots from stored text and look")
-        done
-    }
-
-    /**
-     * Reads the picture of up to [limit] screenshots indexed with an older image model again (the
-     * text is kept): new embeddings, categories and picture keywords. Returns how many were done.
-     */
-    suspend fun reembed(limit: Int, deadline: Long = Long.MAX_VALUE, isStopped: () -> Boolean = { false }): Int = batchLock.withLock {
-        val jobs = repo.lookQueue(limit)
-        if (jobs.isEmpty()) return 0
-        val clip = hub.clip() ?: return 0
-        val classifier = hub.classifier() ?: return 0
-        val tagger = hub.tagger() ?: return 0
-        _progress.value = IndexProgress(running = true, total = jobs.size)
-        var done = 0
-        try {
-            for (job in jobs) {
-                if (isStopped() || System.currentTimeMillis() > deadline) break
-                currentCoroutineContext().ensureActive()
-                try {
-                    val look = withContext(Dispatchers.Default) {
-                        val bitmap = BitmapLoader.load(context.contentResolver, job.uri)
-                        try {
-                            val crops = clip.embedImage(bitmap, 3)
-                            Triple(crops, classifier.classify(crops, job.text, job.app).categories, tagger.keywords(crops))
-                        } finally {
-                            bitmap.recycle()
-                        }
-                    }
-                    repo.saveLook(job.id, look.first, look.second, look.third)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    DotLog.w("look: couldn't read ${job.uri} again: ${e.javaClass.simpleName}: ${e.message}")
-                    repo.skipLook(job.id)
-                }
-                done++
-                _progress.value = IndexProgress(true, done, jobs.size)
-                hub.touch()
-            }
-        } finally {
-            _progress.value = IndexProgress()
-        }
-        DotLog.i("look: read $done pictures again with the current image model")
-        done
-    }
-
-    /**
      * Describes up to [limit] read screenshots with Florence-2 (taken from [since] on, newest
      * first): a description and the objects in their pictures. Returns how many were done.
      */
@@ -244,7 +161,7 @@ class IndexEngine(
                                 bitmap.recycle()
                             }
                         }
-                        repo.saveDescription(job.id, d.text, d.objects)
+                        repo.saveDescription(job.id, d.text, d.objects, CategoryClassifier.classify(job.text + "\n" + d.text, job.app))
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {

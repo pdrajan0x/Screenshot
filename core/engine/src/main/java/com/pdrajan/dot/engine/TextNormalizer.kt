@@ -1,38 +1,15 @@
 package com.pdrajan.dot.engine
 
 import java.text.Normalizer
-import java.util.Locale
 
 /**
- * Port of OpenCLIP's `_clean_lower`: `whitespace_clean(basic_clean(text)).lower()`.
- *
- * `basic_clean` runs ftfy, which has no Kotlin equivalent; [fixText] covers the ftfy fixes
- * that change real-world search queries and OCR text (quotes, ligatures, full-width forms,
- * line breaks, control characters, NFC). Mojibake repair is not ported.
+ * Tidies search queries before they're split into words: typographic quotes, ligatures,
+ * full-width forms, line breaks, control characters and HTML entities become plain text (NFC).
  */
 object TextNormalizer {
 
-    fun cleanLower(text: String): String =
-        whitespaceClean(basicClean(text)).lowercase(Locale.ROOT)
-
     fun basicClean(text: String): String =
         HtmlEntities.unescape(HtmlEntities.unescape(fixText(text))).trim(::isPyWhitespace)
-
-    /** Python's `" ".join(text.split())`. */
-    fun whitespaceClean(text: String): String {
-        val out = StringBuilder(text.length)
-        var pendingSpace = false
-        for (c in text) {
-            if (isPyWhitespace(c)) {
-                pendingSpace = out.isNotEmpty()
-            } else {
-                if (pendingSpace) out.append(' ')
-                pendingSpace = false
-                out.append(c)
-            }
-        }
-        return out.toString()
-    }
 
     /** Characters Python's `str.split()` treats as whitespace. */
     fun isPyWhitespace(c: Char): Boolean =

@@ -7,15 +7,9 @@ import android.database.sqlite.SQLiteException
 import androidx.core.net.toUri
 import com.pdrajan.dot.engine.Entity
 import com.pdrajan.dot.engine.EntityType
-import com.pdrajan.dot.engine.Browsers
-import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.engine.FtsQuery
-import com.pdrajan.dot.engine.PageLink
 import com.pdrajan.dot.engine.PictureWords
 import com.pdrajan.dot.engine.PreciseSearch
-import com.pdrajan.dot.engine.QuantizedVector
-import com.pdrajan.dot.engine.VectorIndex
-import com.pdrajan.dot.engine.VectorMath
 import com.pdrajan.dot.media.MediaItem
 import com.pdrajan.dot.ml.ScreenshotAnalysis
 import kotlinx.coroutines.Dispatchers
@@ -26,8 +20,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -36,9 +28,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
 
     private val db: SQLiteDatabase get() = database.writableDatabase
     private val changes = MutableStateFlow(0L)
-    private val vectorIndex = VectorIndex()
-    private val vectorLoad = Mutex()
-    @Volatile private var vectorsLoaded = false
 
     private fun changed() = changes.update { it + 1 }
 
@@ -168,8 +157,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
             }
         }
         val updating = db.rawQuery(
-            "SELECT COUNT(*) FROM shots WHERE state = ? AND (clip_version < ? OR describe_version < ?)",
-            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.CLIP_VERSION.toString(), ShotsDatabase.DESCRIBE_VERSION.toString()),
+            "SELECT COUNT(*) FROM shots WHERE state = ? AND describe_version < ? AND ocr_pending = 0",
+            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.DESCRIBE_VERSION.toString()),
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
         return IndexCounts(total, indexed, pending, failed, updating)
     }
@@ -266,30 +255,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
         }
     }
 
-    suspend fun similar(id: Long, limit: Int = 12): List<Long> = withContext(Dispatchers.Default) {
-        ensureVectors()
-        vectorIndex.similarTo(id, limit).filter { it.score >= 0.55f }.map { it.id }
-    }
-
-    private suspend fun ensureVectors() {
-        if (vectorsLoaded) return
-        vectorLoad.withLock {
-            if (vectorsLoaded) return
-            withContext(Dispatchers.IO) {
-                val byShot = HashMap<Long, MutableList<QuantizedVector>>()
-                // Only embeddings from the current image model: older ones don't compare with its queries.
-                db.rawQuery(
-                    "SELECT e.shot_id, e.vec FROM embeddings e JOIN shots s ON s.id = e.shot_id WHERE s.clip_version = ? ORDER BY e.shot_id, e.crop",
-                    arrayOf(ShotsDatabase.CLIP_VERSION.toString()),
-                ).use { c ->
-                    while (c.moveToNext()) byShot.getOrPut(c.getLong(0)) { ArrayList(3) } += QuantizedVector.fromBlob(c.getBlob(1))
-                }
-                byShot.forEach { (id, crops) -> vectorIndex.put(id, crops) }
-            }
-            vectorsLoaded = true
-        }
-    }
-
     suspend fun recentSearches(): List<String> = withContext(Dispatchers.IO) {
         db.rawQuery("SELECT query FROM recent_searches ORDER BY at DESC LIMIT 8", null).use { c ->
             buildList { while (c.moveToNext()) add(c.getString(0)) }
@@ -340,7 +305,6 @@ class ShotsRepository(private val database: ShotsDatabase) {
         } finally {
             db.endTransaction()
         }
-        removed.forEach { vectorIndex.remove(it) }
         if (added > 0 || removed.isNotEmpty()) changed()
         SyncResult(added, removed.size)
     }
@@ -349,12 +313,10 @@ class ShotsRepository(private val database: ShotsDatabase) {
         val arg = arrayOf(id.toString())
         db.delete("shots", "id = ?", arg)
         db.delete("shots_fts", "docid = ?", arg)
-        db.delete("embeddings", "shot_id = ?", arg)
         db.delete("collection_items", "shot_id = ?", arg)
     }
 
     suspend fun saveAnalysis(id: Long, analysis: ScreenshotAnalysis) = withContext(Dispatchers.IO) {
-        val crops = analysis.cropEmbeddings.map { QuantizedVector.of(it) }
         db.beginTransaction()
         try {
             val previousSource = db.rawQuery("SELECT app_source FROM shots WHERE id = ?", arrayOf(id.toString())).use { c ->
@@ -377,24 +339,12 @@ class ShotsRepository(private val database: ShotsDatabase) {
                 }
                 put("page_url", analysis.pageUrl)
                 put("headline", analysis.headline)
-                put("keywords", if (analysis.keywords.isEmpty()) "" else analysis.keywords.joinToString(",", ",", ","))
-                put("words_version", ShotsDatabase.WORDS_VERSION)
-                put("clip_version", ShotsDatabase.CLIP_VERSION)
             }, "id = ?", arrayOf(id.toString()))
             rewriteFts(id)
-            db.delete("embeddings", "shot_id = ?", arrayOf(id.toString()))
-            crops.forEachIndexed { i, q ->
-                db.insert("embeddings", null, ContentValues().apply {
-                    put("shot_id", id)
-                    put("crop", i)
-                    put("vec", q.toBlob())
-                })
-            }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
-        if (vectorsLoaded) vectorIndex.put(id, crops)
         changed()
     }
 
@@ -483,139 +433,34 @@ class ShotsRepository(private val database: ShotsDatabase) {
         } finally {
             db.endTransaction()
         }
-        ids.forEach { vectorIndex.remove(it) }
         changed()
     }
 
-    // ---------------------------------------------------------------- keywords and app from stored data
-
-    /** A screenshot read by an earlier version: its text and look are stored, so keywords and app need no new reading. */
-    class WordsJob(val id: Long, val text: String, val appSource: String?, val crops: List<FloatArray>)
-
-    private class WordsRow(val id: Long, val text: String, val source: String?, val clipVersion: Int)
-
-    suspend fun wordsQueue(limit: Int): List<WordsJob> = withContext(Dispatchers.IO) {
-        val rows = db.rawQuery(
-            "SELECT id, COALESCE(ocr_text,''), app_source, clip_version FROM shots WHERE state = ? AND words_version < ? ORDER BY taken_at DESC LIMIT ?",
-            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.WORDS_VERSION.toString(), limit.toString()),
-        ).use { c -> buildList { while (c.moveToNext()) add(WordsRow(c.getLong(0), c.getString(1), c.getString(2), c.getInt(3))) } }
-        rows.map { row ->
-            // Picture keywords need the current image model's embeddings; older rows get them when re-read.
-            val crops = if (row.clipVersion != ShotsDatabase.CLIP_VERSION) emptyList() else
-                db.rawQuery("SELECT vec FROM embeddings WHERE shot_id = ? ORDER BY crop", arrayOf(row.id.toString())).use { c ->
-                    buildList { while (c.moveToNext()) add(VectorMath.l2Normalize(QuantizedVector.fromBlob(c.getBlob(0)).toFloats())) }
-                }
-            WordsJob(row.id, row.text, row.source, crops)
-        }
-    }
+    // ---------------------------------------------------------------- descriptions
 
     /** A screenshot to describe, with the text read from it (to check the description's quotes against). */
-    class DescribeJob(val id: Long, val uri: android.net.Uri, val text: String)
+    class DescribeJob(val id: Long, val uri: android.net.Uri, val text: String, val app: String?)
 
     /** Read screenshots not described yet by the current model, newest first ([since]: taken from then on). */
     suspend fun describeQueue(limit: Int, since: Long = 0L): List<DescribeJob> = withContext(Dispatchers.IO) {
         db.rawQuery(
-            "SELECT id, uri, COALESCE(ocr_text,'') FROM shots WHERE state = ? AND describe_version < ? AND taken_at >= ? ORDER BY taken_at DESC LIMIT ?",
+            // Not before its text is read: the description is checked against it.
+            "SELECT id, uri, COALESCE(ocr_text,''), app FROM shots WHERE state = ? AND describe_version < ? AND ocr_pending = 0 AND taken_at >= ? ORDER BY taken_at DESC LIMIT ?",
             arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.DESCRIBE_VERSION.toString(), since.toString(), limit.toString()),
-        ).use { c -> buildList { while (c.moveToNext()) add(DescribeJob(c.getLong(0), c.getString(1).toUri(), c.getString(2))) } }
+        ).use { c -> buildList { while (c.moveToNext()) add(DescribeJob(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getString(3))) } }
     }
 
-    suspend fun saveDescription(id: Long, description: String?, objects: List<String>) = withContext(Dispatchers.IO) {
+    /** Saves a description and its objects; [categories] (from the text and description) replace the stored ones when given. */
+    suspend fun saveDescription(id: Long, description: String?, objects: List<String>, categories: List<String>? = null) = withContext(Dispatchers.IO) {
         db.update("shots", ContentValues().apply {
             put("description", description?.takeIf { it.isNotBlank() })
             put("objects", if (objects.isEmpty()) "" else objects.joinToString(",", ",", ","))
             put("describe_version", ShotsDatabase.DESCRIBE_VERSION)
+            if (categories != null) put("categories", if (categories.isEmpty()) "" else categories.joinToString(",", ",", ","))
         }, "id = ?", arrayOf(id.toString()))
         rewriteFts(id)
         changed()
     }
-
-    /** A screenshot whose picture was read with an older image model. */
-    class LookJob(val id: Long, val uri: android.net.Uri, val text: String, val app: String?)
-
-    suspend fun lookQueue(limit: Int): List<LookJob> = withContext(Dispatchers.IO) {
-        db.rawQuery(
-            "SELECT id, uri, COALESCE(ocr_text,''), app FROM shots WHERE state = ? AND clip_version < ? ORDER BY taken_at DESC LIMIT ?",
-            arrayOf(IndexState.INDEXED.code.toString(), ShotsDatabase.CLIP_VERSION.toString(), limit.toString()),
-        ).use { c -> buildList { while (c.moveToNext()) add(LookJob(c.getLong(0), c.getString(1).toUri(), c.getString(2), c.getString(3))) } }
-    }
-
-    /** New embeddings from the current image model, with the categories and picture keywords they give. */
-    suspend fun saveLook(id: Long, crops: List<FloatArray>, categories: List<String>, keywords: List<String>) = withContext(Dispatchers.IO) {
-        val quantized = crops.map { QuantizedVector.of(it) }
-        db.beginTransaction()
-        try {
-            db.update("shots", ContentValues().apply {
-                put("categories", if (categories.isEmpty()) "" else categories.joinToString(",", ",", ","))
-                put("keywords", if (keywords.isEmpty()) "" else keywords.joinToString(",", ",", ","))
-                put("clip_version", ShotsDatabase.CLIP_VERSION)
-            }, "id = ?", arrayOf(id.toString()))
-            db.delete("embeddings", "shot_id = ?", arrayOf(id.toString()))
-            quantized.forEachIndexed { i, q ->
-                db.insert("embeddings", null, ContentValues().apply {
-                    put("shot_id", id)
-                    put("crop", i)
-                    put("vec", q.toBlob())
-                })
-            }
-            afterAppKnown(id)
-            rewriteFts(id)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-        if (vectorsLoaded) vectorIndex.put(id, quantized)
-        changed()
-    }
-
-    /** The picture couldn't be read again (file gone or broken): stop trying; it stays findable by its text. */
-    suspend fun skipLook(id: Long) = withContext(Dispatchers.IO) {
-        db.execSQL("UPDATE shots SET clip_version = ? WHERE id = ?", arrayOf<Any>(ShotsDatabase.CLIP_VERSION, id))
-        db.delete("embeddings", "shot_id = ?", arrayOf(id.toString()))
-        vectorIndex.remove(id)
-        changed()
-    }
-
-    /** Saves picture keywords and, unless the app is certain (file name, the user), the app named by the screen's words. */
-    suspend fun saveWords(id: Long, keywords: List<String>, app: String?, appPackage: String?) = withContext(Dispatchers.IO) {
-        db.beginTransaction()
-        try {
-            db.update("shots", ContentValues().apply {
-                put("keywords", if (keywords.isEmpty()) "" else keywords.joinToString(",", ",", ","))
-                put("words_version", ShotsDatabase.WORDS_VERSION)
-            }, "id = ?", arrayOf(id.toString()))
-            db.execSQL(
-                "UPDATE shots SET app = ?, app_package = ?, app_source = ? WHERE id = ? AND $UNCERTAIN_APP",
-                arrayOf<Any?>(app, appPackage, if (app != null) "visual" else null, id),
-            )
-            afterAppKnown(id)
-            rewriteFts(id)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-        changed()
-    }
-
-    /** With the app known: its categories (a chat app → Chats) and, for a browser, the page in the address bar. */
-    private fun afterAppKnown(id: Long) {
-        val (app, pkg, categories, url, text) = db.rawQuery(
-            "SELECT app, app_package, categories, page_url, COALESCE(ocr_text, '') FROM shots WHERE id = ?",
-            arrayOf(id.toString()),
-        ).use { c -> if (!c.moveToFirst()) return else Row5(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4)) }
-        if (app == null) return
-        val current = categories.split(',').filter { it.isNotEmpty() }
-        val merged = (current + Categories.forApp(app)).distinct().take(3)
-        val page = url ?: if (Browsers.isBrowser(app, pkg)) PageLink.inText(text) else null
-        if (merged != current || page != url) {
-            db.update("shots", ContentValues().apply {
-                put("categories", if (merged.isEmpty()) "" else merged.joinToString(",", ",", ","))
-                put("page_url", page)
-            }, "id = ?", arrayOf(id.toString()))
-        }
-    }
-
-    private data class Row5(val app: String?, val pkg: String?, val categories: String, val url: String?, val text: String)
 
     // ---------------------------------------------------------------- source app
 

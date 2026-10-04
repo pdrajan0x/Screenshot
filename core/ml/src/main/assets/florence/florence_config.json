@@ -1,0 +1,93 @@
+{
+ "model": "Florence-2-base",
+ "image_size": 768,
+ "mean": [
+  0.485,
+  0.456,
+  0.406
+ ],
+ "std": [
+  0.229,
+  0.224,
+  0.225
+ ],
+ "decoder_start": 2,
+ "eos": 2,
+ "special": [
+  0,
+  1,
+  2,
+  3,
+  50264
+ ],
+ "max_tokens": 120,
+ "prompts": {
+  "caption": [
+   0,
+   2264,
+   473,
+   5,
+   2274,
+   6190,
+   116,
+   2
+  ],
+  "detailed": [
+   0,
+   47066,
+   21700,
+   11,
+   4617,
+   99,
+   16,
+   2343,
+   11,
+   5,
+   2274,
+   4,
+   2
+  ],
+  "objects": [
+   0,
+   574,
+   22486,
+   5,
+   8720,
+   19,
+   4120,
+   766,
+   11,
+   5,
+   2274,
+   4,
+   2
+  ]
+ },
+ "revision": "d59e079711c57174f29265539fb4cc9f0f335916",
+ "files": [
+  {
+   "name": "vision_encoder.onnx",
+   "url": "https://huggingface.co/onnx-community/Florence-2-base/resolve/d59e079711c57174f29265539fb4cc9f0f335916/onnx/vision_encoder_q4.onnx",
+   "size": 81278591,
+   "sha256": "31a3e25f92f456428acccf3d5d200e366cc249c3e3d251ee992bec269e430582"
+  },
+  {
+   "name": "embed_tokens.onnx",
+   "url": "https://huggingface.co/onnx-community/Florence-2-base/resolve/d59e079711c57174f29265539fb4cc9f0f335916/onnx/embed_tokens_int8.onnx",
+   "size": 39390496,
+   "sha256": "8818c58a214e53bf7e22c48bb4674c2fa3112b9539c3ce4075a2eac797b1ef74"
+  },
+  {
+   "name": "encoder_model.onnx",
+   "url": "https://huggingface.co/onnx-community/Florence-2-base/resolve/d59e079711c57174f29265539fb4cc9f0f335916/onnx/encoder_model_q4.onnx",
+   "size": 30058778,
+   "sha256": "59b7a082bc70d1dab610aef6c1c0e5b421fcadb218798af2081eac0c9b49c285"
+  },
+  {
+   "name": "decoder_model.onnx",
+   "url": "https://huggingface.co/onnx-community/Florence-2-base/resolve/d59e079711c57174f29265539fb4cc9f0f335916/onnx/decoder_model_merged_q4.onnx",
+   "size": 64393631,
+   "sha256": "3ac3071aa9d8211673a1726ea33433a9525085a3f14d000c1df2d5569f3384cf"
+  }
+ ]
+}

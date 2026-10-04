@@ -6,15 +6,20 @@ Picked over same-size models (Florence-2-base-ft, SmolVLM-256M, SmolVLM2-256M, V
 screenshots: the most accurate descriptions of the pictures in them, at ~2 s per screenshot on a
 4-core CPU, 215 MB with 4-bit weights.
 
-Writes into --out (default model-out):
-  assets/florence/vision_encoder.onnx   pixel_values [1,3,768,768] -> image_features [1,577,768]
-  assets/florence/embed_tokens.onnx     input_ids -> inputs_embeds
-  assets/florence/encoder_model.onnx    inputs_embeds + attention_mask -> last_hidden_state
-  assets/florence/decoder_model.onnx    merged decoder (with/without past key values)
-  assets/florence/florence_config.json  prompt token ids per task, special ids, image normalisation
-  assets/florence/tokens.json           token string per id (byte-level BPE), for decoding
-  fixtures/florence_pixels.bin          a test picture, preprocessed (float32 CHW, little-endian)
-  fixtures/florence_fixtures.json       what this reference pipeline generates for it, per task
+The app downloads the model after install, from the pinned [REVISION] below; only the small
+config and token list ship in the APK.
+
+Writes into --assets (default core/ml/src/main/assets/florence, committed):
+  florence_config.json  prompt token ids per task, special ids, image normalisation, and the
+                        model files to download (URL at the pinned revision, size, sha256)
+  tokens.json           token string per id (byte-level BPE), for decoding
+and into --out (default model-out, for the parity test in CI):
+  florence/vision_encoder.onnx   pixel_values [1,3,768,768] -> image_features [1,577,768]
+  florence/embed_tokens.onnx     input_ids -> inputs_embeds
+  florence/encoder_model.onnx    inputs_embeds + attention_mask -> last_hidden_state
+  florence/decoder_model.onnx    merged decoder (with/without past key values)
+  fixtures/florence_pixels.bin   a test picture, preprocessed (float32 CHW, little-endian)
+  fixtures/florence_fixtures.json  what this reference pipeline generates for it, per task
 """
 import argparse
 import json
@@ -23,11 +28,13 @@ import shutil
 
 import numpy as np
 import onnxruntime as ort
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
 from PIL import Image, ImageDraw
 from tokenizers import Tokenizer
 
 REPO = "onnx-community/Florence-2-base"
+# Pinned: the app downloads exactly these files and checks their sha256.
+REVISION = "d59e079711c57174f29265539fb4cc9f0f335916"
 FILES = {
     "vision_encoder.onnx": "onnx/vision_encoder_q4.onnx",
     "embed_tokens.onnx": "onnx/embed_tokens_int8.onnx",
@@ -111,26 +118,35 @@ class Reference:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="model-out")
+    ap.add_argument("--assets", default=os.path.join("core", "ml", "src", "main", "assets", "florence"))
     args = ap.parse_args()
-    folder = os.path.join(args.out, "assets", "florence")
+    folder = os.path.join(args.out, "florence")
     fixtures = os.path.join(args.out, "fixtures")
-    os.makedirs(folder, exist_ok=True)
-    os.makedirs(fixtures, exist_ok=True)
+    for d in (folder, fixtures, args.assets):
+        os.makedirs(d, exist_ok=True)
 
+    info = {f.path: f for f in HfApi().get_paths_info(REPO, list(FILES.values()), revision=REVISION)}
+    downloads = []
     for name, remote in FILES.items():
         dst = os.path.join(folder, name)
         if os.path.exists(dst):
             os.remove(dst)  # the Hugging Face cache hands out read-only files
-        shutil.copyfile(hf_hub_download(REPO, remote), dst)
-        print(f"{name}: {os.path.getsize(os.path.join(folder, name)) / 1e6:.1f} MB")
+        shutil.copyfile(hf_hub_download(REPO, remote, revision=REVISION), dst)
+        print(f"{name}: {os.path.getsize(dst) / 1e6:.1f} MB")
+        downloads.append({
+            "name": name,
+            "url": f"https://huggingface.co/{REPO}/resolve/{REVISION}/{remote}",
+            "size": info[remote].size,
+            "sha256": info[remote].lfs.sha256,
+        })
 
-    tok = Tokenizer.from_file(hf_hub_download(REPO, "tokenizer.json"))
+    tok = Tokenizer.from_file(hf_hub_download(REPO, "tokenizer.json", revision=REVISION))
     vocab = tok.get_vocab(with_added_tokens=True)
     tokens = [""] * (max(vocab.values()) + 1)
     for t, i in vocab.items():
         tokens[i] = t
     special = sorted(i for t, i in vocab.items() if t in ("<s>", "</s>", "<pad>", "<unk>", "<mask>"))
-    with open(os.path.join(folder, "tokens.json"), "w") as f:
+    with open(os.path.join(args.assets, "tokens.json"), "w") as f:
         json.dump(tokens, f, ensure_ascii=False, separators=(",", ":"))
     prompts = {task: tok.encode(text).ids for task, text in TASKS.items()}
     config = {
@@ -138,8 +154,9 @@ def main():
         "image_size": SIZE, "mean": MEAN, "std": STD,
         "decoder_start": START, "eos": EOS, "special": special,
         "max_tokens": MAX_TOKENS, "prompts": prompts,
+        "revision": REVISION, "files": downloads,
     }
-    with open(os.path.join(folder, "florence_config.json"), "w") as f:
+    with open(os.path.join(args.assets, "florence_config.json"), "w") as f:
         json.dump(config, f, indent=1)
 
     pixels = preprocess(test_picture())

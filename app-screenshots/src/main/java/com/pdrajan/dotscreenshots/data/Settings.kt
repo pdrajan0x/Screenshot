@@ -24,6 +24,14 @@ class Settings(context: Context) {
     private val _onboardingDone = MutableStateFlow(prefs.getBoolean(KEY_ONBOARDED, false))
     val onboardingDone: StateFlow<Boolean> = _onboardingDone.asStateFlow()
 
+    private val _showDescriptions = MutableStateFlow(prefs.getBoolean(KEY_DESCRIPTIONS, false))
+    /** Show each screenshot's description and keywords in its details (they're always searchable). */
+    val showDescriptions: StateFlow<Boolean> = _showDescriptions.asStateFlow()
+
+    /** The description model may download over mobile data, not only Wi-Fi. */
+    private val _modelOverMobile = MutableStateFlow(prefs.getBoolean(KEY_MODEL_MOBILE, false))
+    val modelOverMobile: StateFlow<Boolean> = _modelOverMobile.asStateFlow()
+
     private val _gridColumns = MutableStateFlow(prefs.getInt(KEY_COLUMNS, 3))
     val gridColumns: StateFlow<Int> = _gridColumns.asStateFlow()
 
@@ -47,6 +55,16 @@ class Settings(context: Context) {
         _processing.value = policy
     }
 
+    fun setShowDescriptions(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_DESCRIPTIONS, enabled) }
+        _showDescriptions.value = enabled
+    }
+
+    fun setModelOverMobile(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_MODEL_MOBILE, enabled) }
+        _modelOverMobile.value = enabled
+    }
+
     fun setOnboardingDone() {
         prefs.edit { putBoolean(KEY_ONBOARDED, true) }
         _onboardingDone.value = true
@@ -63,5 +81,7 @@ class Settings(context: Context) {
         const val KEY_ONBOARDED = "onboarding_done"
         const val KEY_COLUMNS = "grid_columns"
         const val KEY_AVG_MS = "avg_index_ms"
+        const val KEY_DESCRIPTIONS = "show_descriptions"
+        const val KEY_MODEL_MOBILE = "model_over_mobile"
     }
 }

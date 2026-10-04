@@ -4,10 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
-/**
- * Plain SQLite (no code generation). Text search uses an FTS4 table whose docid is the
- * screenshot id; image embeddings are int8 blobs, one row per crop.
- */
+/** Plain SQLite (no code generation). Text search uses an FTS4 table whose docid is the screenshot id. */
 class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION) {
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -53,9 +50,6 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
         db.execSQL("CREATE INDEX shots_taken ON shots(taken_at DESC)")
         db.execSQL("CREATE INDEX shots_state ON shots(state)")
         createFts(db)
-        db.execSQL(
-            "CREATE TABLE embeddings(shot_id INTEGER NOT NULL, crop INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY(shot_id, crop))",
-        )
         db.execSQL("CREATE TABLE collections(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_at INTEGER NOT NULL)")
         db.execSQL(
             "CREATE TABLE collection_items(collection_id INTEGER NOT NULL, shot_id INTEGER NOT NULL, added_at INTEGER NOT NULL, " +
@@ -102,6 +96,18 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
             createFts(db)
             db.execSQL("INSERT INTO shots_fts(docid, $FTS_COLUMNS) SELECT id, $FTS_SOURCE FROM shots")
         }
+        if (oldVersion < 9) {
+            // MobileCLIP is gone: its picture embeddings and keywords go too, so old and new screenshots
+            // match the same way (Florence-2's description and objects).
+            db.execSQL("DROP TABLE IF EXISTS embeddings")
+            db.execSQL("UPDATE shots SET keywords = ''")
+            // Only MobileCLIP put screenshots in People.
+            db.execSQL("UPDATE shots SET categories = REPLACE(categories, ',people,', ',') WHERE categories LIKE '%,people,%'")
+            db.execSQL("UPDATE shots SET categories = '' WHERE categories = ','")
+            db.execSQL("DROP TABLE IF EXISTS shots_fts")
+            createFts(db)
+            db.execSQL("INSERT INTO shots_fts(docid, $FTS_COLUMNS) SELECT id, $FTS_SOURCE FROM shots")
+        }
     }
 
     private fun createFts(db: SQLiteDatabase) {
@@ -110,7 +116,7 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
 
     companion object {
         const val NAME = "shots.db"
-        const val VERSION = 8
+        const val VERSION = 9
 
         /** Full-text columns, and the shots expressions that fill them (same order). */
         const val FTS_COLUMNS = "ocr_text, note, app, headline, keywords, description"
@@ -123,15 +129,6 @@ class ShotsDatabase(context: Context) : SQLiteOpenHelper(context, NAME, null, VE
          * (new model, new OCR language). Rows with a lower version get re-indexed.
          */
         const val INDEX_VERSION = 1
-
-        /** Bump when picture keywords or app words change: stored rows get them again, without re-reading images. */
-        const val WORDS_VERSION = 1
-
-        /**
-         * The image model behind the stored embeddings (1 = MobileCLIP2-S0, 2 = MobileCLIP2-S2). Rows
-         * made by an older one are kept out of picture search until their picture is read again.
-         */
-        const val CLIP_VERSION = 2
 
         /** The description model behind stored descriptions (1 = Florence-2-base); older rows are described again. */
         const val DESCRIBE_VERSION = 1

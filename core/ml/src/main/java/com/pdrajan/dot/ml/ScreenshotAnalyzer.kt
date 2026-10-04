@@ -12,7 +12,6 @@ import com.pdrajan.dot.engine.Entity
 import com.pdrajan.dot.engine.EntityExtractor
 import com.pdrajan.dot.engine.Headline
 import com.pdrajan.dot.engine.PageLink
-import com.pdrajan.dot.engine.PictureTagger
 import com.pdrajan.dot.engine.SourceApp
 import com.pdrajan.dot.media.DotLog
 
@@ -38,7 +37,6 @@ enum class AppSource(val code: String) {
 
 data class ScreenshotAnalysis(
     val ocrText: String,
-    val cropEmbeddings: List<FloatArray>,
     val categories: List<String>,
     val entities: List<Entity>,
     val sourceApp: String?,
@@ -51,29 +49,24 @@ data class ScreenshotAnalysis(
     val pageUrl: String? = null,
     /** Lines in clearly bigger text (titles, names, headlines). */
     val headline: String = "",
-    /** What MobileCLIP sees in pictures on the screen ("shoes", "beach"); empty for ordinary app screens. */
-    val keywords: List<String> = emptyList(),
 )
 
 /**
- * Full on-device pipeline for one image: decode → OCR (with line positions) → CLIP crops →
- * source app (the file name when the phone puts it there, else the screen's interface words) →
- * headings, picture keywords, categories, entities and page link.
+ * Reading one screenshot: decode → OCR (with line positions) → source app (the file name when
+ * the phone puts it there, else the screen's interface words) → headings, categories, entities
+ * and page link. Its description comes later, from Florence-2.
  */
 class ScreenshotAnalyzer(
     private val context: Context,
-    private val clip: ClipModel,
     /** Null when ML Kit couldn't be set up; screenshots are then indexed without text, to be read later. */
     private val reader: TextReader?,
-    private val classifier: CategoryClassifier,
-    private val tagger: PictureTagger,
     /** The phone's apps, so a recognised app shows under the name the phone uses. */
     private val installed: List<AppNames.Choice>,
     private val extractor: EntityExtractor = EntityExtractor(),
 ) {
     private var loggedOcrError = false
 
-    fun analyze(uri: Uri, displayName: String, runOcr: Boolean = true, maxCrops: Int = 3): ScreenshotAnalysis {
+    fun analyze(uri: Uri, displayName: String, runOcr: Boolean = true): ScreenshotAnalysis {
         val start = System.nanoTime()
         val bitmap = BitmapLoader.load(context.contentResolver, uri)
         try {
@@ -96,15 +89,13 @@ class ScreenshotAnalyzer(
                 OcrResult("", emptyList())
             }
             val text = ocr.text
-            val crops = clip.embedImage(bitmap, maxCrops)
             val app = appFromFileName(displayName) ?: appFromWords(text)
             val browser = Browsers.isBrowser(app?.label, app?.packageName)
             val pageUrl = PageLink.find(ocr.lines, browser)
-            val categories = classifier.classify(crops, text, app?.label).categories
+            val categories = CategoryClassifier.classify(text, app?.label)
             val entities = extractor.extract(text)
             return ScreenshotAnalysis(
                 ocrText = text,
-                cropEmbeddings = crops,
                 categories = categories,
                 entities = entities,
                 sourceApp = app?.label,
@@ -114,7 +105,6 @@ class ScreenshotAnalyzer(
                 appPackage = app?.packageName,
                 pageUrl = pageUrl,
                 headline = Headline.from(ocr.lines),
-                keywords = tagger.keywords(crops),
             )
         } finally {
             bitmap.recycle()

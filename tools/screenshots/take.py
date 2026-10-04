@@ -180,7 +180,7 @@ def report_logs(label):
 
 
 def wait_until_read(max_minutes=40):
-    """Done when Settings shows no progress line ("Reading your screenshots · N left", "Getting ready…")."""
+    """Done when Settings shows no progress line ("Reading your screenshots · N left", the model download)."""
     def open_settings():
         if not in_front():
             launch()
@@ -188,6 +188,9 @@ def wait_until_read(max_minutes=40):
         wait(2)
 
     open_settings()
+    # The README shows descriptions and keywords, which are hidden by default.
+    if tap("Show descriptions and keywords", exact=True, required=False):
+        wait(1)
     started = time.time()
     deadline = started + max_minutes * 60
     reports = 0
@@ -207,7 +210,11 @@ def wait_until_read(max_minutes=40):
             wait(2)
             open_settings()
             continue
-        busy = [t for t in texts if " left" in t or "waiting" in t or "Getting ready" in t or "Reading your screenshots" in t]
+        busy = [
+            t for t in texts
+            if " left" in t or "waiting" in t or "Reading your screenshots" in t
+            or "the description model ·" in t or "Checking the description model" in t or "Description model ·" in t
+        ]
         print("status:", busy[0] if busy else "idle", flush=True)
         if busy:
             seen_busy = True

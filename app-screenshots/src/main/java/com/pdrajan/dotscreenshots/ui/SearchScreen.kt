@@ -312,7 +312,6 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                                         val tag = when {
                                             MatchReason.NOTE in hit.reasons -> "note"
                                             MatchReason.TEXT in hit.reasons -> "text"
-                                            MatchReason.VISUAL in hit.reasons -> "visual"
                                             else -> null
                                         }
                                         hit.shot.app?.let { title ->
@@ -327,7 +326,7 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                                             }
                                         }
                                         if (tag != null) {
-                                            DotTag(tag, Modifier.align(Alignment.TopStart).padding(6.dp), accent = tag == "visual")
+                                            DotTag(tag, Modifier.align(Alignment.TopStart).padding(6.dp))
                                         }
                                     },
                                 )

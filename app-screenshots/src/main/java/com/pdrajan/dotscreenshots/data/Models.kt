@@ -34,7 +34,7 @@ data class ShotDetail(
     val entities: List<Entity>,
     val note: String,
     val collections: List<ShotCollection>,
-    /** What's in the picture: MobileCLIP's keywords ("shoes", "beach") and the objects Florence-2 found ("suit", "boot"). */
+    /** What's in the picture: the objects Florence-2 found ("suit", "boot"). */
     val keywords: List<String> = emptyList(),
     /** Florence-2's description of the screenshot; null until it has been described. */
     val description: String? = null,

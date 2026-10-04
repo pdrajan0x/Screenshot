@@ -10,6 +10,9 @@ import java.io.Closeable
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
 
+/** One model file the app downloads after install, checked against its size and sha256. */
+data class ModelFile(val name: String, val url: String, val size: Long, val sha256: String)
+
 /** assets/florence/florence_config.json and tokens.json, written by tools/model/fetch_florence.py. */
 class FlorenceConfig(
     val imageSize: Int,
@@ -23,6 +26,8 @@ class FlorenceConfig(
     val prompts: Map<String, LongArray>,
     /** Byte-level BPE string of each token id. */
     val tokens: List<String>,
+    /** The model files, downloaded after install (about 215 MB). */
+    val files: List<ModelFile> = emptyList(),
 ) {
     companion object {
         fun parse(configJson: String, tokensJson: String): FlorenceConfig {
@@ -40,6 +45,12 @@ class FlorenceConfig(
                 maxTokens = c.optInt("max_tokens", 120),
                 prompts = p.keys().asSequence().associateWith { k -> p.getJSONArray(k).let { a -> LongArray(a.length()) { a.getLong(it) } } },
                 tokens = List(t.length()) { t.getString(it) },
+                files = c.optJSONArray("files")?.let { a ->
+                    List(a.length()) { i ->
+                        val f = a.getJSONObject(i)
+                        ModelFile(f.getString("name"), f.getString("url"), f.getLong("size"), f.getString("sha256"))
+                    }
+                }.orEmpty(),
             )
         }
     }

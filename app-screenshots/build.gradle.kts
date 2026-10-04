@@ -48,14 +48,9 @@ android {
         }
     }
 
-    androidResources {
-        // The CLIP models are memory-mapped from the APK, which requires them to be stored uncompressed.
-        noCompress.add("onnx")
-    }
-
     packaging {
         jniLibs {
-            // Store native libraries (ONNX Runtime, ML Kit's text reader) compressed: a much smaller
+            // Store native libraries (ONNX Runtime) compressed: a much smaller
             // APK to download, extracted once at install.
             useLegacyPackaging = true
         }
@@ -91,5 +86,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.work.runtime)
+    // Installs Compose's ahead-of-time compilation profile on sideloaded installs (Play does this
+    // itself): smooth scrolling and transitions from the first launch instead of after days of JIT.
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.telephoto.zoomable.coil)
 }

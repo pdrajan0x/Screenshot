@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.random.Random
 
 class SourceAppTest {
     @Test
@@ -29,78 +28,12 @@ class SourceAppTest {
     }
 }
 
-class CropPlannerTest {
-    @Test
-    fun tallScreenshotGetsThreeCrops() {
-        val crops = CropPlanner.squareCrops(1080, 2400)
-        assertEquals(listOf(CropRect(0, 0, 1080), CropRect(0, 660, 1080), CropRect(0, 1320, 1080)), crops)
-    }
-
-    @Test
-    fun squareishGetsCentreCrop() {
-        assertEquals(listOf(CropRect(160, 0, 960)), CropPlanner.squareCrops(1280, 960))
-    }
-
-    @Test
-    fun landscape16x9GetsTwoCrops() {
-        assertEquals(listOf(CropRect(0, 0, 1080), CropRect(840, 0, 1080)), CropPlanner.squareCrops(1920, 1080))
-    }
-}
-
-class VectorIndexTest {
-    private fun randomUnit(rng: Random, dim: Int = 512) =
-        VectorMath.l2Normalize(FloatArray(dim) { rng.nextFloat() * 2 - 1 })
-
-    @Test
-    fun quantizedDotStaysClose() {
-        val rng = Random(7)
-        repeat(20) {
-            val a = randomUnit(rng)
-            val b = randomUnit(rng)
-            val q = QuantizedVector.fromBlob(QuantizedVector.of(b).toBlob())
-            assertEquals(VectorMath.dot(a, b), q.dot(a), 0.01f)
-        }
-    }
-
-    @Test
-    fun bestCropWins() {
-        val rng = Random(1)
-        val target = randomUnit(rng)
-        val index = VectorIndex()
-        repeat(200) { i -> index.put(i.toLong(), listOf(QuantizedVector.of(randomUnit(rng)))) }
-        index.put(999L, listOf(QuantizedVector.of(randomUnit(rng)), QuantizedVector.of(target)))
-        val hits = index.search(target, 5)
-        assertEquals(999L, hits.first().id)
-        assertTrue(hits.first().score > 0.95f)
-        assertEquals(5, hits.size)
-        assertTrue(hits.zipWithNext().all { (a, b) -> a.score >= b.score })
-    }
-}
-
 class SearchTest {
     @Test
     fun ftsQueryUsesPrefixOnLastTerm() {
         assertEquals("movie tick*", FtsQuery.build("Movie Tick"))
         assertEquals("नमस्ते*", FtsQuery.build("नमस्ते"))
         assertNull(FtsQuery.build("  ?? "))
-    }
-
-    @Test
-    fun itemsFoundTwiceRankFirst() {
-        val merged = HybridRanker.merge(
-            text = listOf(1L, 2L),
-            visual = listOf(VectorHit(3L, 0.3f), VectorHit(2L, 0.29f)),
-            category = emptyList(),
-        )
-        assertEquals(2L, merged.first().id)
-        assertEquals(setOf(MatchReason.TEXT, MatchReason.VISUAL), merged.first().reasons)
-    }
-
-    @Test
-    fun weakVisualMatchesAreDropped() {
-        assertTrue(HybridRanker.filterVisual(listOf(VectorHit(1, 0.12f))).isEmpty())
-        val kept = HybridRanker.filterVisual(listOf(VectorHit(1, 0.30f), VectorHit(2, 0.27f), VectorHit(3, 0.20f)))
-        assertEquals(listOf(1L, 2L), kept.map { it.id })
     }
 
     @Test

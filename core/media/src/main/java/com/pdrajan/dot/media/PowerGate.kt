@@ -6,7 +6,7 @@ import android.os.Build
 import android.os.PowerManager
 
 /**
- * When background work (reading text, picture keywords, faces) may run, from the user's
+ * When background work (reading text, describing pictures) may run, from the user's
  * [ProcessingPolicy] plus what the phone says: on battery it needs enough charge, never runs with
  * battery saver on or on a warm phone, and nothing at all runs on a hot one.
  */

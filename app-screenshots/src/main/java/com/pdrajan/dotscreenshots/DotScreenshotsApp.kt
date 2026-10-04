@@ -21,6 +21,7 @@ import com.pdrajan.dotscreenshots.data.ShotsDatabase
 import com.pdrajan.dotscreenshots.data.ShotsRepository
 import com.pdrajan.dotscreenshots.index.IndexEngine
 import com.pdrajan.dotscreenshots.index.IndexScheduler
+import com.pdrajan.dotscreenshots.index.ModelDownload
 import com.pdrajan.dotscreenshots.index.ModelHub
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -67,7 +68,7 @@ class AppContainer(val context: Context) {
     val settings = Settings(context)
     val repo = ShotsRepository(ShotsDatabase(context))
     val media = MediaStoreSource(context)
-    val hub = ModelHub(context, scope)
+    val hub = ModelHub(context, scope, ModelDownload(context))
     val power = PowerGate(context) { settings.processing.value }
 
     val installed = InstalledApps(context)
@@ -83,24 +84,65 @@ class AppContainer(val context: Context) {
 
     private var foregroundJob: Job? = null
 
-    /** App opened: new screenshots are read right away, newest first, a few at a time. */
+    /**
+     * App opened: new screenshots are read right away, newest first, a few at a time. The
+     * background job is queued up front too, so whatever is left carries on after the app closes.
+     */
     fun onForeground() {
         foregroundJob?.cancel()
+        // After install (or if it was interrupted): fetch the description model, on Wi-Fi unless chosen otherwise.
+        scope.launch { checkModel(start = true) }
         foregroundJob = scope.launch {
             runCatching { engine.sync() }
+            scheduleBackgroundWork()
             while (isActive && processStep(userAsked = false, foreground = true) > 0) Unit
-            val counts = repo.counts()
-            if (counts.pending + counts.updating > 0 && settings.processing.value.background) scheduler.scheduleBacklog()
+            scheduleBackgroundWork()
         }
     }
 
+    /** Queues the background job when anything is left to read or describe (and it's allowed). */
+    private suspend fun scheduleBackgroundWork() {
+        if (!settings.processing.value.background) return
+        val counts = withContext(Dispatchers.IO) { repo.counts() }
+        val describing = counts.updating > 0 && hub.download.ready
+        if (counts.pending > 0 || describing) scheduler.scheduleBacklog()
+    }
+
+    /** The description model finished downloading: describe the library, in the app or in the background. */
+    suspend fun onModelReady() {
+        DotLog.i("model: ready")
+        scheduleBackgroundWork()
+    }
+
+    /** Downloads the description model (again), over mobile data too if Settings allows it. */
+    fun startModelDownload() {
+        scope.launch(Dispatchers.IO) { hub.download.start(mobileData = settings.modelOverMobile.value) }
+    }
+
     /**
-     * Reads up to [STEP] screenshots (text, headings, picture keywords, app, categories), describes
-     * up to [STEP] read ones (Florence-2: description and objects), brings up
-     * to [STEP] * 25 older ones up to date from what is already stored (no image is read again), and
-     * re-reads the picture of up to [STEP] screenshots indexed with an older image model.
-     * New screenshots always; older ones (and re-reading pictures) only while charging, or as chosen
-     * in Settings → Processing; [userAsked] is "Do it now".
+     * Where the description model is: finished files are checked and moved into place (in case the
+     * app wasn't running when they finished), and with [start] a download that never began (or
+     * failed) starts.
+     */
+    suspend fun checkModel(start: Boolean = false): ModelDownload.State = withContext(Dispatchers.IO) {
+        val download = hub.download
+        var state = runCatching { download.state() }.getOrElse { return@withContext ModelDownload.State.Failed(it.message ?: "error") }
+        if (state is ModelDownload.State.Checking && download.install()) {
+            onModelReady()
+            state = ModelDownload.State.Ready
+        }
+        // A failed download (no connection to Hugging Face, full storage) is tried again on the next app open.
+        if (start && (state is ModelDownload.State.NotStarted || state is ModelDownload.State.Failed)) {
+            download.start(mobileData = settings.modelOverMobile.value)
+            state = download.state()
+        }
+        state
+    }
+
+    /**
+     * Reads up to [STEP] screenshots (text, headings, app, categories) and describes up to [STEP]
+     * read ones (Florence-2: description and objects). New screenshots always; older ones only
+     * while charging, or as chosen in Settings → Processing; [userAsked] is "Do it now".
      */
     suspend fun processStep(
         userAsked: Boolean,
@@ -111,14 +153,16 @@ class AppContainer(val context: Context) {
         val since = power.since(userAsked)
         val read = engine.process(limit = STEP, deadline = deadline, since = since, isStopped = isStopped)
         val described = engine.describe(limit = STEP, since = since, deadline = deadline, isStopped = isStopped)
-        val refreshed = engine.refreshWords(limit = STEP * 25)
-        val reread = if (power.backlogAllowed(userAsked)) engine.reembed(limit = STEP, deadline = deadline, isStopped = isStopped) else 0
-        return read + described + refreshed + reread
+        return read + described
     }
 
-    /** Left the app: work started from the screen stops (even "Do it now"), unless the phone is charging. */
+    /**
+     * Left the app: work started from the screen stops (even "Do it now"), unless the phone is
+     * charging, and the background job takes over what's left.
+     */
     fun onBackground() {
         if (!_backlogRunning.value || !power.isCharging) foregroundJob?.cancel()
+        scope.launch { scheduleBackgroundWork() }
     }
 
     /** "Do it now": everything, whatever the battery rules say, while the app stays open. */

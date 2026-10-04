@@ -1,42 +1,9 @@
 package com.pdrajan.dot.engine
 
-import kotlin.math.ceil
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
-
-/** A square region of the source image, in source pixels. */
-data class CropRect(val left: Int, val top: Int, val size: Int)
-
-object CropPlanner {
-
-    /**
-     * CLIP sees a square. A tall screenshot (e.g. 1080×2400) centre-cropped to a square loses its
-     * top and bottom, so long images are covered by up to [maxCrops] evenly spaced squares instead.
-     * Near-square images (≤ 1.35:1) get a single centre crop, matching CLIP's own preprocessing.
-     */
-    fun squareCrops(width: Int, height: Int, maxCrops: Int = 3): List<CropRect> {
-        require(width > 0 && height > 0)
-        val side = min(width, height)
-        val long = max(width, height)
-        val ratio = long.toFloat() / side
-        val n = if (ratio <= 1.35f) 1 else min(maxCrops, max(2, ceil(ratio - 0.2f).toInt()))
-        val offsets = if (n == 1) {
-            listOf((long - side) / 2)
-        } else {
-            val step = (long - side).toFloat() / (n - 1)
-            List(n) { i -> (i * step).roundToInt() }
-        }
-        return offsets.map { off ->
-            if (height >= width) CropRect(0, off, side) else CropRect(off, 0, side)
-        }
-    }
-}
-
 object PixelPreprocess {
     /**
      * Writes ARGB pixels of a `size × size` image into [out] at [offset] as planar RGB floats:
-     * `(channel / 255 - mean) / std`. MobileCLIP uses mean 0 / std 1.
+     * `(channel / 255 - mean) / std` (Florence-2: ImageNet mean and std).
      */
     fun argbToChw(
         pixels: IntArray,

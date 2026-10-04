@@ -1,8 +1,14 @@
 package com.pdrajan.dotscreenshots.ui
 
 import android.net.Uri
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
@@ -24,7 +30,6 @@ object ShotContext {
     const val ALL = "all"
     const val SEARCH = "search"
     const val FAVORITES = "fav"
-    const val SINGLE = "single"
     fun category(id: String) = "cat:$id"
     fun collection(id: Long) = "col:$id"
 }
@@ -48,8 +53,11 @@ fun DotScreenshotsNavHost(container: AppContainer) {
     NavHost(
         navController = nav,
         startDestination = if (onboarded) "home" else "onboarding",
-        enterTransition = { fadeIn() },
-        exitTransition = { fadeOut() },
+        // Short and eased: the new screen fades and grows in slightly over the old one, and back.
+        enterTransition = { fadeIn(tween(220, easing = LinearOutSlowInEasing)) + scaleIn(tween(260, easing = FastOutSlowInEasing), initialScale = 0.96f) },
+        exitTransition = { fadeOut(tween(160, easing = FastOutLinearInEasing)) },
+        popEnterTransition = { fadeIn(tween(220, easing = LinearOutSlowInEasing)) },
+        popExitTransition = { fadeOut(tween(160, easing = FastOutLinearInEasing)) + scaleOut(tween(200, easing = FastOutSlowInEasing), targetScale = 0.96f) },
     ) {
         composable("onboarding") {
             OnboardingScreen(onDone = {
@@ -89,7 +97,6 @@ fun DotScreenshotsNavHost(container: AppContainer) {
                 initialId = id,
                 context = ctx,
                 onBack = { nav.popBackStack() },
-                onOpenShot = { openDetail(it, ShotContext.SINGLE) },
                 onOpenCollection = { nav.navigate("list/${Uri.encode(ShotContext.collection(it))}") },
                 onSearch = { q -> nav.navigate("search?q=${Uri.encode(q)}") },
                 onEdit = { nav.navigate("edit/$it") },

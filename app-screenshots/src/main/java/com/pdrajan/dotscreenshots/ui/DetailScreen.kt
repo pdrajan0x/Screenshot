@@ -91,7 +91,6 @@ import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotOutlinedButton
 import com.pdrajan.dot.design.KeywordChips
 import com.pdrajan.dot.design.DotTheme
-import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.media.MediaActions
 import com.pdrajan.dotscreenshots.AppContainer
@@ -109,7 +108,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
@@ -160,12 +158,10 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
     val current = MutableStateFlow(initialId)
     val detail: StateFlow<ShotDetail?> =
         current.flatMapLatest { c.repo.observeDetail(it) }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val similar: StateFlow<List<Shot>> = current.mapLatest { id ->
-        val ids = c.repo.similar(id)
-        val byId = c.repo.shotsByIds(ids)
-        ids.mapNotNull { byId[it] }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val collections = c.repo.observeCollections().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Settings → "Show descriptions and keywords" (off by default). */
+    val showDescriptions: StateFlow<Boolean> = c.settings.showDescriptions
 
     fun select(id: Long) {
         current.value = id
@@ -196,7 +192,6 @@ fun DetailScreen(
     initialId: Long,
     context: String,
     onBack: () -> Unit,
-    onOpenShot: (Long) -> Unit,
     onOpenCollection: (Long) -> Unit,
     onSearch: (String) -> Unit,
     onEdit: (Long) -> Unit,
@@ -244,7 +239,6 @@ fun DetailScreen(
                         request = pageRequest,
                         onToggleChrome = { chrome = !chrome },
                         onDetailsShown = { detailsShown = it },
-                        onOpenShot = onOpenShot,
                         onOpenCollection = onOpenCollection,
                         onSearch = onSearch,
                     )
@@ -294,21 +288,7 @@ fun DetailScreen(
                     .glass(glass, Color.Black, tintAlpha = 0.45f)
                     .navigationBarsPadding(),
             ) {
-                // A handle: tap it (or swipe the screenshot up) for the details.
-                Column(
-                    Modifier.fillMaxWidth().clickable { requestDetails(open = true) }.padding(horizontal = 24.dp, vertical = 8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Box(Modifier.width(36.dp).height(4.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.5f)))
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Swipe up for details",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                Spacer(Modifier.height(8.dp))
                 val actions = detail?.entities?.flatMap { entityActions(it) }.orEmpty()
                 if (actions.isNotEmpty()) {
                     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -359,8 +339,8 @@ fun DetailScreen(
 private data class PageRequest(val id: Long, val open: Boolean, val serial: Int)
 
 /**
- * One screenshot, full screen, with its details below it: swipe up to read
- * them, like Pixel Screenshots. Pinch and double-tap zoom the picture.
+ * One screenshot, full screen, with its details below it (the Details button, or scrolling up,
+ * brings them in). Pinch and double-tap zoom the picture.
  */
 @Composable
 private fun ShotPage(
@@ -370,7 +350,6 @@ private fun ShotPage(
     request: PageRequest?,
     onToggleChrome: () -> Unit,
     onDetailsShown: (Boolean) -> Unit,
-    onOpenShot: (Long) -> Unit,
     onOpenCollection: (Long) -> Unit,
     onSearch: (String) -> Unit,
 ) {
@@ -405,7 +384,7 @@ private fun ShotPage(
             ) {
                 val d = detail
                 if (d != null) {
-                    DetailSheet(d, vm, onOpenShot = onOpenShot, onOpenCollection = onOpenCollection, onSearch = onSearch)
+                    DetailSheet(d, vm, onOpenCollection = onOpenCollection, onSearch = onSearch)
                 } else {
                     Spacer(Modifier.fillMaxWidth().height(160.dp))
                 }
@@ -427,10 +406,10 @@ private fun ViewerAction(icon: androidx.compose.ui.graphics.vector.ImageVector, 
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -> Unit, onOpenCollection: (Long) -> Unit, onSearch: (String) -> Unit) {
+private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenCollection: (Long) -> Unit, onSearch: (String) -> Unit) {
     val ctx = LocalContext.current
     val collections by vm.collections.collectAsStateWithLifecycle()
-    val similar by vm.similar.collectAsStateWithLifecycle()
+    val showDescriptions by vm.showDescriptions.collectAsStateWithLifecycle()
     var note by remember(d.shot.id) { mutableStateOf(d.note) }
     var picker by remember { mutableStateOf(false) }
     var appPicker by remember { mutableStateOf(false) }
@@ -472,11 +451,14 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
         }
         Spacer(Modifier.height(8.dp))
 
-        SheetSection("Description") {
-            when {
-                d.description != null -> Text(d.description, style = MaterialTheme.typography.bodyLarge)
-                d.shot.state == IndexState.FAILED -> Text("Couldn't be read.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else -> Text("Not described yet — it'll be done soon.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // The description and keywords are for search; shown only if Settings asks for them.
+        if (showDescriptions) {
+            SheetSection("Description") {
+                when {
+                    d.description != null -> Text(d.description, style = MaterialTheme.typography.bodyLarge)
+                    d.shot.state == IndexState.FAILED -> Text("Couldn't be read.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> Text("Not described yet — it'll be done soon.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
 
@@ -484,7 +466,7 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
 
         // Keywords stay tucked away until asked for.
         var showKeywords by rememberSaveable(d.shot.id) { mutableStateOf(false) }
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
+        if (showDescriptions) Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
             DotOutlinedButton(
                 if (showKeywords) "Hide keywords" else "Show keywords",
                 onClick = { showKeywords = !showKeywords },
@@ -500,7 +482,7 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         else -> Text(
-                            "No picture keywords for this one; search finds it by the words on screen.",
+                            "No keywords for this one; search finds it by its description and the words on screen.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -575,22 +557,6 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
                 }
             }
         }
-
-        if (similar.isNotEmpty()) {
-            SheetSection("Similar") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(similar, key = { it.id }) { s ->
-                        MediaThumbnail(
-                            model = s.uri,
-                            aspectRatio = 9f / 16f,
-                            cornerRadius = 10.dp,
-                            onClick = { onOpenShot(s.id) },
-                            modifier = Modifier.width(84.dp),
-                        )
-                    }
-                }
-            }
-        }
     }
 
     if (picker) {
@@ -647,7 +613,7 @@ private fun FileDetailsList(d: ShotDetail) {
             Icons.AutoMirrored.Rounded.ManageSearch,
             "Search",
             when (shot.state) {
-                IndexState.INDEXED -> if (d.text.isBlank()) "Searchable by picture" else "Searchable · ${d.text.split(Regex("\\s+")).count { it.isNotBlank() }} words read"
+                IndexState.INDEXED -> if (d.text.isBlank()) "Searchable by its description" else "Searchable · ${d.text.split(Regex("\\s+")).count { it.isNotBlank() }} words read"
                 IndexState.PENDING -> "Waiting to be read"
                 IndexState.FAILED -> "Couldn't be read"
             },

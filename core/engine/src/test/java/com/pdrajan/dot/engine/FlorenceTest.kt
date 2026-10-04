@@ -15,17 +15,26 @@ import java.nio.ByteOrder
 /**
  * The app's Florence-2 pipeline (FlorenceModel) against tools/model/fetch_florence.py: same
  * picture in, same tokens out. Skipped when the model hasn't been fetched (model-out/).
+ * Also checks the shipped config lists the files to download.
  */
 class FlorenceParityTest {
 
-    private val modelOut = File(System.getProperty("clip.modelOut"))
-    private val folder = File(modelOut, "assets/florence")
+    @Test
+    fun shippedConfigListsTheModelFiles() {
+        val config = FlorenceConfig.parse(File(assets, "florence_config.json").readText(), File(assets, "tokens.json").readText())
+        assertEquals(listOf("vision_encoder.onnx", "embed_tokens.onnx", "encoder_model.onnx", "decoder_model.onnx"), config.files.map { it.name })
+        assertTrue(config.files.all { it.url.startsWith("https://huggingface.co/") && it.sha256.length == 64 && it.size > 1_000_000 })
+    }
+
+    private val modelOut = File(System.getProperty("model.out"))
+    private val folder = File(modelOut, "florence")
+    private val assets = File(System.getProperty("florence.assets"))
     private val fixtures = File(modelOut, "fixtures/florence_fixtures.json")
 
     @Test
     fun generatesWhatTheReferenceGenerates() {
         assumeTrue("Florence not fetched", fixtures.exists())
-        val config = FlorenceConfig.parse(File(folder, "florence_config.json").readText(), File(folder, "tokens.json").readText())
+        val config = FlorenceConfig.parse(File(assets, "florence_config.json").readText(), File(assets, "tokens.json").readText())
         val env = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions().apply { setIntraOpNumThreads(4) }
         fun session(name: String) = env.createSession(File(folder, name).absolutePath, options)

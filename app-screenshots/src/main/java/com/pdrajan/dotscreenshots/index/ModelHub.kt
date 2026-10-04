@@ -1,12 +1,8 @@
 package com.pdrajan.dotscreenshots.index
 
 import android.content.Context
-import com.pdrajan.dot.engine.CategoryClassifier
-import com.pdrajan.dot.engine.PictureTagger
 import com.pdrajan.dot.engine.PictureWords
-import com.pdrajan.dot.ml.ClipModel
 import com.pdrajan.dot.ml.FlorenceDescriber
-import com.pdrajan.dot.ml.PromptBank
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,67 +13,29 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Owns the models for the whole process: MobileCLIP (picture search, categories, keywords) and
- * Florence-2 (descriptions). Sessions are released after a minute and a half without use so the
- * model weights don't sit in RAM while the app is idle.
+ * Owns Florence-2 (descriptions) for the whole process, once its files are downloaded
+ * ([ModelDownload]). Sessions are released after a minute and a half without use so the model
+ * doesn't sit in RAM while the app is idle.
  */
-class ModelHub(private val context: Context, private val scope: CoroutineScope) {
-
-    val available: Boolean by lazy { ClipModel.isAvailable(context) }
+class ModelHub(private val context: Context, private val scope: CoroutineScope, val download: ModelDownload) {
 
     private val mutex = Mutex()
-    private var model: ClipModel? = null
-    private var classifier: CategoryClassifier? = null
-    private var tagger: PictureTagger? = null
     private var florence: FlorenceDescriber? = null
-
-    /** Whether this build ships the description model. */
-    val describes: Boolean by lazy { FlorenceDescriber.isAvailable(context) }
-
-    /** The picture keyword list, for search ("motorcycle" → bike). */
-    val words: PictureWords? by lazy { runCatching { PromptBank.pictureWords(context) }.getOrNull() }
     private var releaseJob: Job? = null
 
-    suspend fun clip(): ClipModel? {
-        if (!available) return null
-        val m = mutex.withLock {
-            model ?: withContext(Dispatchers.IO) { ClipModel.load(context) }.also { model = it }
-        }
-        touch()
-        return m
+    /** Picture words and their other names, for search ("motorcycle" → bike). */
+    val words: PictureWords? by lazy {
+        runCatching { context.assets.open("words/picture_words.json").bufferedReader().use { PictureWords.parse(it.readText()) } }.getOrNull()
     }
 
-    suspend fun classifier(): CategoryClassifier? {
-        classifier?.let { return it }
-        val clip = clip() ?: return null
-        return mutex.withLock {
-            classifier ?: withContext(Dispatchers.Default) { PromptBank.classifier(context, clip) }.also {
-                classifier = it
-                // Prompt embeddings are cached on disk; indexing doesn't need the text encoder after this.
-                clip.releaseText()
-            }
-        }
-    }
-
+    /** The description model, or null until it's downloaded and checked. */
     suspend fun florence(): FlorenceDescriber? {
-        if (!describes) return null
+        val dir = download.installedDir() ?: return null
         val d = mutex.withLock {
-            florence ?: withContext(Dispatchers.IO) { FlorenceDescriber.load(context) }.also { florence = it }
+            florence ?: withContext(Dispatchers.IO) { FlorenceDescriber.load(context, dir) }.also { florence = it }
         }
         touch()
         return d
-    }
-
-    /** Picture keywords for pictures inside screenshots (prompt embeddings cached on disk after the first run). */
-    suspend fun tagger(): PictureTagger? {
-        tagger?.let { return it }
-        val clip = clip() ?: return null
-        return mutex.withLock {
-            tagger ?: withContext(Dispatchers.Default) { PromptBank.pictureTagger(context, clip, forScreenshots = true) }.also {
-                tagger = it
-                clip.releaseText()
-            }
-        }
     }
 
     /** Postpones releasing the model; call while work is ongoing. */
@@ -86,10 +44,7 @@ class ModelHub(private val context: Context, private val scope: CoroutineScope) 
         releaseJob?.cancel()
         releaseJob = scope.launch {
             delay(90_000)
-            mutex.withLock {
-                model?.close()
-                florence?.close()
-            }
+            mutex.withLock { florence?.close() }
         }
     }
 }

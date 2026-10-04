@@ -12,13 +12,15 @@ import com.pdrajan.dot.engine.OcrLine
 import java.io.Closeable
 import java.util.concurrent.TimeUnit
 
-/**
- * On-device OCR with ML Kit; the models are bundled in the APK, so nothing is downloaded.
- * The Devanagari recogniser also reads Latin script, so Hindi mode needs a single pass.
- */
 /** Text read from a screenshot: joined top to bottom, plus each line with its position. */
 data class OcrResult(val text: String, val lines: List<OcrLine>)
 
+/**
+ * On-device OCR with ML Kit through Google Play services: the models are fetched once at install
+ * (see the manifest's com.google.mlkit.vision.DEPENDENCIES) and screenshots read before they
+ * arrive are read again later ([isModelUnavailable]). The Devanagari recogniser also reads Latin
+ * script, so Hindi mode needs a single pass.
+ */
 class TextReader(val hindi: Boolean) : Closeable {
 
     private val recognizer: TextRecognizer = TextRecognition.getClient(
@@ -108,8 +110,8 @@ class TextReader(val hindi: Boolean) : Closeable {
 
     companion object {
         /**
-         * True when OCR failed because the model isn't available yet (older builds fetched it from Play services) —
-         * a reason to retry later rather than mark the screenshot as failed.
+         * True when OCR failed because Play services is still fetching the model: a reason to retry
+         * later rather than mark the screenshot as failed.
          */
         fun isModelUnavailable(error: Throwable): Boolean {
             var e: Throwable? = error

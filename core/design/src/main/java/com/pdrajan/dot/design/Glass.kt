@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.HazePerformanceMode
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.blur.HazeBlurStyle
 import dev.chrisbanes.haze.blur.HazeColorEffect
@@ -40,4 +41,6 @@ fun Modifier.glass(
         colorEffects(listOf(HazeColorEffect.tint(tint.copy(alpha = tintAlpha))))
         fallbackColorEffect(HazeColorEffect.tint(tint.copy(alpha = 0.9f)))
     },
+    // Blurs a half-size copy: looks the same under this much blur, and keeps scrolling smooth.
+    performanceMode = HazePerformanceMode.Performance,
 )

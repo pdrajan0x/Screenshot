@@ -14,48 +14,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  model:
-    name: Export MobileCLIP2-S2 and fetch Florence-2-base
+  android:
+    name: Build APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore exported model
+      # Florence-2-base, only for the Kotlin-vs-Python parity test: the app downloads the model
+      # after install, so it's not in the APK.
+      - name: Restore Florence-2-base
         id: cache
         uses: actions/cache@v4
         with:
           path: model-out
-          key: models-${{ hashFiles('tools/model/export_mobileclip.py', 'tools/model/fetch_florence.py', 'tools/model/requirements.txt') }}
+          key: florence-${{ hashFiles('tools/model/fetch_florence.py', 'tools/model/requirements.txt') }}
 
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Export to ONNX
+      - name: Fetch Florence-2-base
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           pip install -r tools/model/requirements.txt
-          python tools/model/export_mobileclip.py --out model-out
-          python tools/model/fetch_florence.py --out model-out
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: clip-model
-          path: model-out
-          retention-days: 3
-
-  android:
-    name: Build APK
-    needs: [model]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: clip-model
-          path: model-out
+          python tools/model/fetch_florence.py --out model-out --assets "$RUNNER_TEMP/florence-assets"
+          # The config shipped in the APK (download links, checksums, prompts) must match the pinned model.
+          diff -q "$RUNNER_TEMP/florence-assets/florence_config.json" core/ml/src/main/assets/florence/florence_config.json
+          diff -q "$RUNNER_TEMP/florence-assets/tokens.json" core/ml/src/main/assets/florence/tokens.json
 
       - uses: actions/setup-java@v4
         with:
@@ -122,6 +108,11 @@ jobs:
           # R8 mappings, to turn obfuscated stack traces from the phone back into real names.
           cp app-screenshots/build/outputs/mapping/release/mapping.txt dist/DotScreenshots-mapping.txt
           ls -la dist
+          size=$(stat -c %s dist/DotScreenshots.apk)
+          echo "APK size: $((size / 1000000)) MB"
+          echo "### DotScreenshots.apk: $((size / 1000000)) MB" >> "$GITHUB_STEP_SUMMARY"
+          # The models are downloaded after install; a big APK means something slipped back in.
+          if [ "$size" -gt 25000000 ]; then echo "::error::APK is over 25 MB"; exit 1; fi
 
       - name: Check ML Kit survived R8
         run: |

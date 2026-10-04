@@ -16,7 +16,7 @@ kotlin {
 }
 
 dependencies {
-    // Android has org.json built in; only compiled against here (picture keyword list parsing).
+    // Android has org.json built in; only compiled against here (word list and model config parsing).
     compileOnly(libs.org.json)
     // FlorenceModel uses the ONNX Runtime API; on Android onnxruntime-android provides it (core:ml).
     compileOnly(libs.onnxruntime.jvm)
@@ -26,9 +26,9 @@ dependencies {
 }
 
 tasks.test {
-    // Shared with the Android modules: the BPE vocabulary ships as an app asset.
-    systemProperty("clip.vocab", file("../ml/src/main/assets/clip/bpe_simple_vocab_16e6.txt.gz").absolutePath)
-    systemProperty("clip.pictureWords", file("../ml/src/main/assets/clip/picture_words.json").absolutePath)
-    // Produced by tools/model/export_mobileclip.py. Model parity tests are skipped when absent.
-    systemProperty("clip.modelOut", System.getenv("CLIP_MODEL_OUT") ?: file("../../model-out").absolutePath)
+    // Shared with the Android modules: these ship as app assets.
+    systemProperty("words.picture", file("../ml/src/main/assets/words/picture_words.json").absolutePath)
+    systemProperty("florence.assets", file("../ml/src/main/assets/florence").absolutePath)
+    // The Florence-2 model files, from tools/model/fetch_florence.py. Model parity tests are skipped when absent.
+    systemProperty("model.out", System.getenv("MODEL_OUT") ?: file("../../model-out").absolutePath)
 }

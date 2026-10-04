@@ -430,7 +430,7 @@ fun SettingsRow(
     }
 }
 
-/** Small monospace tag, e.g. "TEXT" / "VISUAL" on search results. */
+/** Small monospace tag, e.g. "text" / "note" on search results. */
 @Composable
 fun DotTag(text: String, modifier: Modifier = Modifier, accent: Boolean = false) {
     Box(

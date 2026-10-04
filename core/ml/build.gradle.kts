@@ -17,16 +17,6 @@ android {
     }
 }
 
-// The ONNX models are exported in CI (tools/model/export_mobileclip.py) into model-out/.
-val modelAssets = rootProject.file("model-out/assets")
-androidComponents {
-    onVariants { variant ->
-        if (modelAssets.isDirectory) {
-            variant.sources.assets?.addStaticSourceDirectory(modelAssets.absolutePath)
-        }
-    }
-}
-
 dependencies {
     api(project(":core:engine"))
     api(project(":core:media"))

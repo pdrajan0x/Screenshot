@@ -8,7 +8,7 @@ import java.io.File
 
 class PreciseSearchTest {
 
-    private val words: PictureWords by lazy { PictureWords.parse(File(System.getProperty("clip.pictureWords")!!).readText()) }
+    private val words: PictureWords by lazy { PictureWords.parse(File(System.getProperty("words.picture")!!).readText()) }
 
     @Test
     fun wholeWordSearchFindsPluralsNotLongerWords() {
@@ -47,8 +47,6 @@ class PreciseSearchTest {
         assertTrue("lake" in all && "river" in all && "lake" !in words.meanings("river"))
         assertTrue(words.meanings("bike").isEmpty())
         assertEquals(listOf("bike"), words.meanings("scooty"))
-        val prompts = words.prompts(forScreenshots = false)
-        assertEquals(words.words.sumOf { it.prompts.size } + words.background.size, prompts.size)
     }
 
     @Test
@@ -82,29 +80,6 @@ class PreciseSearchTest {
             listOf(PreciseSearch.SearchDoc(7, strong = "bike street", body = ""), PreciseSearch.SearchDoc(8, strong = "car", body = "")),
         )
         assertEquals(listOf(7L), bike.all)
-    }
-
-    @Test
-    fun taggerKeepsOnlyClearWinners() {
-        // Two-word vocabulary in one group plus a background prompt, in a 3-d toy space.
-        val vocab = PictureWords(
-            listOf(PictureWords.Group("vehicles", emptyList(), false, listOf(
-                PictureWords.Word("car", emptyList(), listOf("a car")),
-                PictureWords.Word("bike", emptyList(), listOf("a bike")),
-            ))),
-            background = listOf("a photo"),
-            screenshotBackground = emptyList(),
-        )
-        fun v(x: Float, y: Float, z: Float) = VectorMath.l2Normalize(floatArrayOf(x, y, z))
-        val car = v(1f, 0f, 0.2f)
-        val bike = v(0f, 1f, 0.2f)
-        val photo = v(0f, 0f, 1f)
-        val tagger = PictureTagger(vocab, listOf(car, bike, photo), logitScale = 64f)
-        assertEquals(listOf("car"), tagger.keywords(listOf(v(1f, 0.1f, 0.4f))))
-        // Halfway between car and bike: neither is a clear winner, so no keyword at all.
-        assertEquals(emptyList<String>(), tagger.keywords(listOf(v(1f, 1f, 0.4f))))
-        // Closer to "a photo" than to any word: nothing.
-        assertEquals(emptyList<String>(), tagger.keywords(listOf(v(0.1f, 0f, 1f))))
     }
 
     @Test
