@@ -10,7 +10,7 @@ import java.io.File
  */
 class AndroidRegexCompatTest {
 
-    private val roots = listOf("src/main", "../ml/src/main", "../media/src/main", "../design/src/main", "../../app-screenshots/src/main", "../../app-gallery/src/main")
+    private val roots = listOf("src/main", "../ml/src/main", "../media/src/main", "../design/src/main", "../../app-screenshots/src/main")
         .map(::File).filter { it.isDirectory }
 
     @Test

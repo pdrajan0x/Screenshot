@@ -53,7 +53,7 @@ def unescape(s):
 
 consts = {"MONTH_RX": "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)",
           "phrase": "last month"}
-files = [f for d in ["core", "app-screenshots", "app-gallery"] for f in glob.glob(f"{ROOT}/{d}/**/src/main/**/*.kt", recursive=True)]
+files = [f for d in ["core", "app-screenshots"] for f in glob.glob(f"{ROOT}/{d}/**/src/main/**/*.kt", recursive=True)]
 total = bad = 0
 for f in files:
     src = open(f).read()

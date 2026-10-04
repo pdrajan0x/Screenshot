@@ -52,6 +52,13 @@ android {
         noCompress.add("onnx")
     }
 
+    packaging {
+        jniLibs {
+            // Store native libraries (ONNX Runtime, ML Kit's text reader) compressed: a much smaller
+            // APK to download, extracted once at install.
+            useLegacyPackaging = true
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

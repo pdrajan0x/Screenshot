@@ -24,7 +24,7 @@ import torch
 from onnxruntime.quantization import QuantType, quantize_dynamic
 
 # S2 over S0: on 86 labelled photos the app's keyword rule got 71 right (1 wrong) vs 62 (1 wrong),
-# for ~2.6x the image time; B got 72 for another ~2.8x (tools/model/compare_clip.py).
+# for ~2.6x the image time; B got 72 for another ~2.8x.
 MODEL = "MobileCLIP2-S2"
 PRETRAINED = "dfndr2b"
 
@@ -232,6 +232,8 @@ def main():
     # Weight-only quantisation (activations stay fp32) first: it keeps CLIP's text geometry,
     # whereas dynamic int8 (activations quantised too) measured ~0.95 cosine.
     quant_variants = [
+        # 8-bit barely needs small blocks: one fp32 scale per 128 weights instead of 32 saves ~4 MB.
+        ("nbits8b128-matmul+nbits4-gather", lambda src, dst: nbits_mixed(src, dst, work, matmul_block=128)),
         ("nbits8-matmul+nbits4-gather", lambda src, dst: nbits_mixed(src, dst, work)),
         ("nbits4-matmul-gather", lambda src, dst: nbits_quantize(src, dst, bits=4, ops=("MatMul", "Gather"))),
         ("nbits8-matmul-gather", lambda src, dst: nbits_quantize(src, dst, bits=8, ops=("MatMul", "Gather"))),
@@ -333,13 +335,13 @@ def fp16_weights(src, dst, min_elements=1024, max_rel_error=1e-3):
     print(f"fp16 weights: {len(halves)} tensors halved, {len(kept)} kept fp32 " + str([(n[:40], round(e, 4), round(a, 1)) for n, e, a in kept[:8]]))
 
 
-def nbits_quantize(src, dst, bits, ops):
+def nbits_quantize(src, dst, bits, ops, block_size=32):
     """Blockwise weight-only quantisation (MatMulNBits / GatherBlockQuantized contrib ops)."""
     import inspect
     from onnxruntime.quantization import matmul_nbits_quantizer as mnq
 
     quantizer_params = inspect.signature(mnq.MatMulNBitsQuantizer.__init__).parameters
-    kwargs = {"block_size": 32, "is_symmetric": True}
+    kwargs = {"block_size": block_size, "is_symmetric": True}
     if "bits" in quantizer_params:
         kwargs["bits"] = bits
     elif bits != 4:
@@ -357,10 +359,10 @@ def nbits_quantize(src, dst, bits, ops):
     quantizer.model.save_model_to_file(dst, use_external_data_format=False)
 
 
-def nbits_mixed(src, dst, work):
+def nbits_mixed(src, dst, work, matmul_block=32):
     """8-bit weight-only MatMuls (accuracy) + 4-bit token-embedding Gather (size)."""
     tmp = os.path.join(work, "text-nbits8-tmp.onnx")
-    nbits_quantize(src, tmp, bits=8, ops=("MatMul",))
+    nbits_quantize(src, tmp, bits=8, ops=("MatMul",), block_size=matmul_block)
     nbits_quantize(tmp, dst, bits=4, ops=("Gather",))
 
 

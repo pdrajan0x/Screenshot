@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -60,23 +63,21 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
-import com.pdrajan.dot.design.DiagnosticsDialog
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotEmptyState
 import com.pdrajan.dot.design.DotLargeTitle
-import com.pdrajan.dot.design.DotProgressStrip
 import com.pdrajan.dot.design.DotSearchPill
 import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.design.SectionLabel
+import com.pdrajan.dot.design.glassSource
+import com.pdrajan.dot.design.rememberGlass
 import com.pdrajan.dot.design.pinchToChangeColumns
 import com.pdrajan.dot.engine.Categories
 import com.pdrajan.dot.media.MediaActions
 import com.pdrajan.dotscreenshots.AppContainer
-import com.pdrajan.dotscreenshots.data.IndexCounts
 import com.pdrajan.dotscreenshots.data.Shot
 import com.pdrajan.dotscreenshots.data.ShotCollection
-import com.pdrajan.dotscreenshots.index.IndexProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -95,14 +96,8 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
         shots.map { groupByDay(it) }.flowOn(Dispatchers.Default).stateIn(viewModelScope, started, emptyList())
     val collections = c.repo.observeCollections().stateIn(viewModelScope, started, emptyList())
     val categoryCounts = c.repo.observeCategoryCounts().stateIn(viewModelScope, started, emptyMap())
-    val counts = c.repo.observeCounts().stateIn(viewModelScope, started, IndexCounts(0, 0, 0, 0))
     val favoriteCount = c.repo.observeFavorites().map { it.size }.stateIn(viewModelScope, started, 0)
-    val progress: StateFlow<IndexProgress> = c.engine.progress
-    val lastError: StateFlow<String?> = c.engine.lastError
-    fun waitingFor(): String? = c.power.blocker() ?: if (!c.power.backlogAllowed()) "older ones are done while charging" else null
-    val backlogRunning: StateFlow<Boolean> = c.backlogRunning
     val columns: StateFlow<Int> = c.settings.gridColumns
-    val modelAvailable: Boolean get() = c.hub.available
 
     private val _selection = MutableStateFlow<Set<Long>>(emptySet())
     val selection: StateFlow<Set<Long>> = _selection.asStateFlow()
@@ -159,8 +154,6 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
         clearSelection()
     }
 
-    fun processAll() = c.processAllNow()
-    fun stopProcessing() = c.stopProcessing()
     fun setColumns(n: Int) = c.settings.setGridColumns(n)
 }
 
@@ -180,12 +173,7 @@ fun HomeScreen(
     val shots by vm.shots.collectAsStateWithLifecycle()
     val collections by vm.collections.collectAsStateWithLifecycle()
     val categoryCounts by vm.categoryCounts.collectAsStateWithLifecycle()
-    val counts by vm.counts.collectAsStateWithLifecycle()
     val favoriteCount by vm.favoriteCount.collectAsStateWithLifecycle()
-    val progress by vm.progress.collectAsStateWithLifecycle()
-    val lastError by vm.lastError.collectAsStateWithLifecycle()
-    var diagnostics by remember { mutableStateOf(false) }
-    val backlogRunning by vm.backlogRunning.collectAsStateWithLifecycle()
     val columns by vm.columns.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
     val selecting by vm.selecting.collectAsStateWithLifecycle()
@@ -198,8 +186,6 @@ fun HomeScreen(
     val deleter = rememberDeleteLauncher()
 
     BackHandler(enabled = selectionMode) { vm.clearSelection() }
-
-    if (diagnostics) DiagnosticsDialog("DotScreenshots") { diagnostics = false }
 
     if (showPicker) {
         CollectionPickerDialog(
@@ -229,23 +215,25 @@ fun HomeScreen(
                     onShare = { context.startSafely(MediaActions.shareIntent(vm.selectedUris())) },
                     onDelete = { deleter.delete(vm.selectedUris()) { ok -> if (ok) vm.forgetSelection() } },
                 )
-            } else if (!selectionMode) {
-                // Search sits at the bottom, within thumb reach.
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    DotSearchPill(
-                        "Search your screenshots",
-                        onClick = onSearch,
-                        modifier = Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
-                    )
-                }
             }
         },
     ) { padding ->
+        val glass = rememberGlass()
+        val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        // Room under the last row for the floating search bar.
+        val searchSpace = if (selectionMode) 0.dp else navBottom + 88.dp
+        val headerCount = if (selectionMode) 0 else 1 + (if (collections.isNotEmpty() || favoriteCount > 0) 1 else 0) + (if (categoryCounts.isNotEmpty()) 1 else 0)
+        val marks = remember(days, headerCount, shots.isEmpty()) {
+            var index = headerCount + if (shots.isEmpty()) 1 else 0
+            days.map { (_, list) -> ScrubMark(index, list.first().takenAt).also { index += 1 + list.size } }
+        }
+        Box(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             state = gridState,
-            contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp),
+            contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = maxOf(padding.calculateBottomPadding(), searchSpace) + 16.dp),
             modifier = Modifier.fillMaxSize()
+                .glassSource(glass)
                 .pinchToChangeColumns(columns, vm::setColumns, min = 2, max = 5)
                 .dragToSelect(gridState, { currentSelection }, vm::setSelection, { currentIds }),
         ) {
@@ -256,19 +244,6 @@ fun HomeScreen(
                         if (shots.isNotEmpty()) IconButton(onClick = vm::startSelecting) { Icon(Icons.Rounded.Checklist, "Select") }
                         IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
                     }
-                }
-                fullSpan("status") {
-                    StatusStrip(
-                        progress = progress,
-                        counts = counts,
-                        backlogRunning = backlogRunning,
-                        modelAvailable = vm.modelAvailable,
-                        lastError = lastError,
-                        waitingFor = vm.waitingFor(),
-                        onProcessAll = vm::processAll,
-                        onStop = vm::stopProcessing,
-                        onDetails = { diagnostics = true },
-                    )
                 }
                 if (collections.isNotEmpty() || favoriteCount > 0) {
                     fullSpan("collections") {
@@ -322,52 +297,21 @@ fun HomeScreen(
                 }
             }
         }
+            if (!selectionMode) {
+                DotSearchPill(
+                    "Search your screenshots",
+                    onClick = onSearch,
+                    glass = glass,
+                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+                DateScrubber(gridState, marks, Modifier.align(Alignment.CenterEnd), bottomInset = searchSpace)
+            }
+        }
     }
 }
 
 private fun LazyGridScope.fullSpan(key: String, content: @Composable () -> Unit) {
     item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
-}
-
-/** One line about the library: how many screenshots are left, why it's waiting, or what went wrong. */
-@Composable
-private fun StatusStrip(
-    progress: IndexProgress,
-    counts: IndexCounts,
-    backlogRunning: Boolean,
-    modelAvailable: Boolean,
-    lastError: String?,
-    waitingFor: String?,
-    onProcessAll: () -> Unit,
-    onStop: () -> Unit,
-    onDetails: () -> Unit,
-) {
-    val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-    // Screenshots still to read, plus those whose picture is read again for the newer image model.
-    val left = counts.pending + counts.updating
-    val total = counts.total
-    val done = (total - left).coerceAtLeast(0)
-    val stop: @Composable () -> Unit = { if (backlogRunning) TextButton(onClick = onStop) { Text("Stop", color = DotTheme.extra.accent) } }
-    when {
-        !modelAvailable -> DotProgressStrip("This build has no image model; only basic listing works.", modifier)
-        progress.preparing -> DotProgressStrip("Getting ready… the first time takes a minute", modifier)
-        lastError != null -> DotProgressStrip(
-            text = lastError,
-            modifier = modifier,
-            action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
-        )
-        progress.running -> DotProgressStrip(
-            text = "Reading your screenshots · $left left",
-            modifier = modifier,
-            progress = if (total > 0) done.toFloat() / total else null,
-            action = stop,
-        )
-        left > 0 -> DotProgressStrip(
-            text = "$left screenshots waiting" + (waitingFor?.let { " · $it" } ?: ""),
-            modifier = modifier,
-            action = { TextButton(onClick = onProcessAll) { Text("Do it now", color = DotTheme.extra.accent) } },
-        )
-    }
 }
 
 @Composable

@@ -7,6 +7,12 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- Android 9 and older: saving an edited copy writes to shared storage. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <!-- The viewer's details show where a screenshot was taken when the file records it. -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <!-- Personal sideloaded app: lets Xiaomi-style screenshot names (package ids) show real app names. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
@@ -22,11 +28,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.DotScreenshots"
         tools:targetApi="36">
-
-        <!-- Ask Play services to fetch the OCR models at install time instead of on first use. -->
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr,ocr_devanagari" />
 
         <!-- ONNX Runtime 1.30 ships an HTTP telemetry uploader; everything here stays on the phone. -->
         <provider

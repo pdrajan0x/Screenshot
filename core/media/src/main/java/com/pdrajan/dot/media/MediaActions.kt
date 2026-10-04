@@ -25,13 +25,6 @@ object MediaActions {
             null
         }
 
-    fun deleteRequest(context: Context, uris: List<Uri>): PendingIntent? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && uris.isNotEmpty()) {
-            MediaStore.createDeleteRequest(context.contentResolver, uris)
-        } else {
-            null
-        }
-
     /**
      * Android 10 and older: delete directly. Android 10 may throw RecoverableSecurityException
      * for files another app created; callers fall back to asking the user.

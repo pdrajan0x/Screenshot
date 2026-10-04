@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.chrisbanes.haze.HazeState
 
 /** Big dot-matrix screen title, e.g. "SCREENSHOTS". */
 @Composable
@@ -98,12 +99,16 @@ fun DotSearchPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     trailing: (@Composable RowScope.() -> Unit)? = null,
+    /** Float over content as frosted glass (the content must be marked with [glassSource]). */
+    glass: HazeState? = null,
 ) {
+    val fill = MaterialTheme.colorScheme.surfaceContainerHigh
     Surface(
         onClick = onClick,
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = modifier.fillMaxWidth().height(52.dp),
+        color = if (glass != null) Color.Transparent else fill,
+        border = if (glass != null) BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)) else null,
+        modifier = modifier.fillMaxWidth().height(56.dp).let { if (glass != null) it.glass(glass, fill, CircleShape) else it },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 18.dp)) {
             Icon(Icons.Rounded.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -130,11 +135,15 @@ fun DotSearchField(
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
     onSearch: () -> Unit = {},
+    /** Float over content as frosted glass (the content must be marked with [glassSource]). */
+    glass: HazeState? = null,
 ) {
+    val fill = MaterialTheme.colorScheme.surfaceContainerHigh
     Surface(
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = modifier.fillMaxWidth().height(52.dp),
+        color = if (glass != null) Color.Transparent else fill,
+        border = if (glass != null) BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)) else null,
+        modifier = modifier.fillMaxWidth().height(56.dp).let { if (glass != null) it.glass(glass, fill, CircleShape) else it },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
             IconButton(onClick = onBack) {

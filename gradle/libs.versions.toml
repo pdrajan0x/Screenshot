@@ -15,14 +15,10 @@ work = "2.12.0"
 exifinterface = "1.4.2"
 coroutines = "1.11.0"
 coil = "3.6.3"
+haze = "2.0.1"
 telephoto = "0.19.0"
 onnxruntime = "1.30.0"
-mlkitTextLatin = "19.0.1"
-mlkitTextDevanagari = "16.0.1"
-mlkitFace = "17.1.0"
-media3 = "1.11.0"
-biometric = "1.1.0"
-fragment = "1.8.5"
+mlkitText = "16.0.1"
 junit = "4.13.2"
 orgJson = "20260814"
 
@@ -45,24 +41,17 @@ compose-foundation = { group = "androidx.compose.foundation", name = "foundation
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIconsExtended" }
 
-kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
-coil-video = { group = "io.coil-kt.coil3", name = "coil-video", version.ref = "coil" }
+haze-blur = { group = "dev.chrisbanes.haze", name = "haze-blur", version.ref = "haze" }
 telephoto-zoomable-coil = { group = "me.saket.telephoto", name = "zoomable-image-coil3", version.ref = "telephoto" }
 
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 onnxruntime-jvm = { group = "com.microsoft.onnxruntime", name = "onnxruntime", version.ref = "onnxruntime" }
-mlkit-text-latin = { group = "com.google.android.gms", name = "play-services-mlkit-text-recognition", version.ref = "mlkitTextLatin" }
-mlkit-text-devanagari = { group = "com.google.android.gms", name = "play-services-mlkit-text-recognition-devanagari", version.ref = "mlkitTextDevanagari" }
-mlkit-face = { group = "com.google.android.gms", name = "play-services-mlkit-face-detection", version.ref = "mlkitFace" }
-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
-media3-transformer = { group = "androidx.media3", name = "media3-transformer", version.ref = "media3" }
-media3-effect = { group = "androidx.media3", name = "media3-effect", version.ref = "media3" }
-androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
-androidx-fragment = { group = "androidx.fragment", name = "fragment-ktx", version.ref = "fragment" }
+# Bundled text reader: the models ship inside the APK, nothing is downloaded after install.
+mlkit-text-latin = { group = "com.google.mlkit", name = "text-recognition", version.ref = "mlkitText" }
+mlkit-text-devanagari = { group = "com.google.mlkit", name = "text-recognition-devanagari", version.ref = "mlkitText" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }

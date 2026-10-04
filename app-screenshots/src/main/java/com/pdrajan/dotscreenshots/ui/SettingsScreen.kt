@@ -45,6 +45,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pdrajan.dot.design.DiagnosticsDialog
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotLargeTitle
+import com.pdrajan.dot.design.DotProgressStrip
+import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.ProcessingSettings
 import com.pdrajan.dot.design.SectionLabel
 import com.pdrajan.dot.design.SettingsRow
@@ -53,6 +55,7 @@ import com.pdrajan.dot.design.ThemeMode
 import com.pdrajan.dot.media.OldModelFiles
 import com.pdrajan.dotscreenshots.BuildConfig
 import com.pdrajan.dotscreenshots.data.IndexCounts
+import com.pdrajan.dotscreenshots.index.IndexProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,6 +74,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     var confirmReindex by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
     var diagnostics by remember { mutableStateOf(false) }
+    val progress by c.engine.progress.collectAsStateWithLifecycle()
+    val lastError by c.engine.lastError.collectAsStateWithLifecycle()
+    val backlogRunning by c.backlogRunning.collectAsStateWithLifecycle()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -91,6 +97,18 @@ fun SettingsScreen(onBack: () -> Unit) {
         ) {
             DotLargeTitle("SETTINGS", Modifier.padding(horizontal = 20.dp))
             Spacer(Modifier.height(16.dp))
+            // Processing lives here, not on the home screen: what's left, why it waits, "Do it now".
+            StatusStrip(
+                progress = progress,
+                counts = counts,
+                backlogRunning = backlogRunning,
+                modelAvailable = c.hub.available,
+                lastError = lastError,
+                waitingFor = c.power.blocker() ?: if (!c.power.backlogAllowed()) "older ones are done while charging" else null,
+                onProcessAll = c::processAllNow,
+                onStop = c::stopProcessing,
+                onDetails = { diagnostics = true },
+            )
 
             SectionLabel("Appearance", Modifier.padding(horizontal = 20.dp))
             Row(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -189,7 +207,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmReindex = false },
             title = { Text("Re-scan everything?") },
-            text = { Text("Every screenshot will be read again, following Settings → Processing (or right away with “Do it now” on the home screen).") },
+            text = { Text("Every screenshot will be read again, following Settings → Processing (or right away with “Do it now” under Settings → Status).") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmReindex = false
@@ -210,18 +228,59 @@ fun SettingsScreen(onBack: () -> Unit) {
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "MobileCLIP2-S0 — Apple Machine Learning Research Model is licensed under the Apple Machine Learning " +
+                        "MobileCLIP2-S2 — Apple Machine Learning Research Model is licensed under the Apple Machine Learning " +
                             "Research Model License Agreement (research / non-commercial use).",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text("ONNX Runtime — MIT License, Microsoft.", style = MaterialTheme.typography.bodySmall)
                     Text("OpenCLIP tokenizer vocabulary — MIT License, OpenAI.", style = MaterialTheme.typography.bodySmall)
-                    Text("Text recognition — Google ML Kit (Google Play services).", style = MaterialTheme.typography.bodySmall)
+                    Text("Text recognition — Google ML Kit (bundled models).", style = MaterialTheme.typography.bodySmall)
                     Text("Fonts: Doto, Space Grotesk, Space Mono — SIL Open Font License 1.1.", style = MaterialTheme.typography.bodySmall)
-                    Text("Coil, Telephoto, AndroidX — Apache License 2.0.", style = MaterialTheme.typography.bodySmall)
+                    Text("Coil, Telephoto, Haze, AndroidX — Apache License 2.0.", style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = { TextButton(onClick = { showLicenses = false }) { Text("Close") } },
+        )
+    }
+}
+
+/** One line about the library: how many screenshots are left, why it's waiting, or what went wrong. */
+@Composable
+private fun StatusStrip(
+    progress: IndexProgress,
+    counts: IndexCounts,
+    backlogRunning: Boolean,
+    modelAvailable: Boolean,
+    lastError: String?,
+    waitingFor: String?,
+    onProcessAll: () -> Unit,
+    onStop: () -> Unit,
+    onDetails: () -> Unit,
+) {
+    val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+    // Screenshots still to read, plus those whose picture is read again for the newer image model.
+    val left = counts.pending + counts.updating
+    val total = counts.total
+    val done = (total - left).coerceAtLeast(0)
+    val stop: @Composable () -> Unit = { if (backlogRunning) TextButton(onClick = onStop) { Text("Stop", color = DotTheme.extra.accent) } }
+    when {
+        !modelAvailable -> DotProgressStrip("This build has no image model; only basic listing works.", modifier)
+        progress.preparing -> DotProgressStrip("Getting ready… the first time takes a minute", modifier)
+        lastError != null -> DotProgressStrip(
+            text = lastError,
+            modifier = modifier,
+            action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
+        )
+        progress.running -> DotProgressStrip(
+            text = "Reading your screenshots · $left left",
+            modifier = modifier,
+            progress = if (total > 0) done.toFloat() / total else null,
+            action = stop,
+        )
+        left > 0 -> DotProgressStrip(
+            text = "$left screenshots waiting" + (waitingFor?.let { " · $it" } ?: ""),
+            modifier = modifier,
+            action = { TextButton(onClick = onProcessAll) { Text("Do it now", color = DotTheme.extra.accent) } },
         )
     }
 }

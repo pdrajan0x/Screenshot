@@ -1,6 +1,13 @@
-package com.pdrajan.dotgallery.ui
+package com.pdrajan.dotscreenshots.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import android.graphics.Canvas
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
@@ -72,27 +79,25 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.exifinterface.media.ExifInterface
 import com.pdrajan.dot.design.DotLoader
 import com.pdrajan.dot.design.DotPrimaryButton
 import com.pdrajan.dot.design.DotTheme
+import com.pdrajan.dot.media.MediaInfo
 import com.pdrajan.dot.media.MediaWriter
 import com.pdrajan.dot.ml.BitmapLoader
-import com.pdrajan.dotgallery.data.Media
+import com.pdrajan.dotscreenshots.data.Shot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
-private enum class EditTab(val label: String) { CROP("Crop"), ADJUST("Adjust"), FILTERS("Filters"), MARKUP("Markup") }
+/** Markup comes right after crop: circling or highlighting part of a screen is the usual edit. */
+private enum class EditTab(val label: String) { CROP("Crop"), MARKUP("Markup"), ADJUST("Adjust"), FILTERS("Filters") }
 
 private data class Aspect(val label: String, val ratio: Float?)
 private val ASPECTS = listOf(Aspect("Free", null), Aspect("Original", -1f), Aspect("1:1", 1f), Aspect("4:3", 4f / 3), Aspect("3:4", 3f / 4), Aspect("16:9", 16f / 9), Aspect("9:16", 9f / 16))
@@ -145,12 +150,16 @@ private val FILTERS = listOf(
     Filter("Retro", CM.concat(CM.contrast(1.05f), CM.sepia())),
 )
 
+/**
+ * Edits a screenshot — crop, rotate, markup, adjust, filters — and saves the result as a new PNG
+ * next to the original (same folder and date); the original is never changed.
+ */
 @Composable
-fun EditorScreen(id: Long, nav: GalleryNav) {
-    val c = galleryContainer()
+fun EditScreen(id: Long, onBack: () -> Unit) {
+    val c = appContainer()
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var media by remember { mutableStateOf<Media?>(null) }
+    var media by remember { mutableStateOf<Shot?>(null) }
     var source by remember { mutableStateOf<Bitmap?>(null) }
     var base by remember { mutableStateOf<ImageBitmap?>(null) }
     var baseBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -172,9 +181,15 @@ fun EditorScreen(id: Long, nav: GalleryNav) {
     var saving by remember { mutableStateOf(false) }
 
     LaunchedEffect(id) {
-        val m = c.repo.mediaByIds(listOf(id))[id] ?: return@LaunchedEffect
+        val m = c.repo.shotsByIds(listOf(id))[id] ?: return@LaunchedEffect
         media = m
-        source = withContext(Dispatchers.IO) { BitmapLoader.load(ctx.contentResolver, m.uri, maxWidth = 2560, maxPixels = 8_000_000) }
+        source = withContext(Dispatchers.IO) {
+            runCatching { BitmapLoader.load(ctx.contentResolver, m.uri, maxWidth = 2560, maxPixels = 10_000_000) }.getOrNull()
+        }
+        if (source == null) {
+            Toast.makeText(ctx, "Couldn't open this screenshot", Toast.LENGTH_SHORT).show()
+            onBack()
+        }
     }
 
     // Rotate and flip are taps: the base is rebuilt. Straighten and every adjustment are drawn live
@@ -222,41 +237,47 @@ fun EditorScreen(id: Long, nav: GalleryNav) {
                 val straight = if (straighten != 0f) transformBase(b, 0, false, straighten) else b
                 render(straight, crop, colorMatrix(), vignette, strokes.toList()).also { if (straight !== b) straight.recycle() }
             }
-            val name = m.name.substringBeforeLast('.') + "_edited.jpg"
+            // PNG keeps text sharp; the copy goes in the original's folder with its date.
+            val name = m.name.substringBeforeLast('.') + "_edited.png"
             val uri = withContext(Dispatchers.IO) {
-                val tmp = File(ctx.cacheDir, "edit-${System.currentTimeMillis()}.jpg")
-                tmp.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-                // Keep the original's capture time so the copy sits next to it in the timeline.
+                val tmp = File(ctx.cacheDir, "edit-${System.currentTimeMillis()}.png")
                 runCatching {
-                    val exif = ExifInterface(tmp)
-                    val fmt = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
-                    exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, fmt.format(Date(m.takenAt)))
-                    exif.setAttribute(ExifInterface.TAG_DATETIME, fmt.format(Date(m.takenAt)))
-                    exif.saveAttributes()
-                }
-                MediaWriter.saveFile(ctx, tmp, name, "image/jpeg").also { tmp.delete() }
+                    tmp.outputStream().use { out.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    val folder = MediaInfo.read(ctx, m.uri).folder ?: "Pictures/Screenshots"
+                    MediaWriter.saveImage(ctx, tmp, name, "image/png", folder, m.takenAt)
+                }.getOrNull().also { tmp.delete() }
             }
             out.recycle()
             saving = false
             if (uri != null) {
-                ctx.toast("Saved a copy to ${MediaWriter.ALBUM_DIR}")
-                c.refresh()
-                nav.back()
+                Toast.makeText(ctx, "Saved a copy", Toast.LENGTH_SHORT).show()
+                onBack()
             } else {
-                ctx.toast("Couldn't save")
+                Toast.makeText(ctx, "Couldn't save", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
+    // Android 9 and older need storage write access to add the copy.
+    val writeAccess = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) save() else Toast.makeText(ctx, "Saving needs storage access", Toast.LENGTH_SHORT).show()
+    }
+
+    fun saveCopy() {
+        val needsPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        if (needsPermission) writeAccess.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) else save()
+    }
+
     Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { nav.back() }) { Icon(Icons.Rounded.Close, "Cancel", tint = Color.White) }
+            IconButton(onClick = onBack) { Icon(Icons.Rounded.Close, "Cancel", tint = Color.White) }
             Spacer(Modifier.weight(1f))
             if (edited && !saving) {
                 TextButton(onClick = ::reset) { Text("Reset", color = Color.White) }
             }
             if (saving) DotLoader(Modifier.padding(end = 16.dp))
-            else DotPrimaryButton("Save copy", onClick = ::save, accent = true, modifier = Modifier.padding(end = 8.dp))
+            else DotPrimaryButton("Save copy", onClick = ::saveCopy, accent = true, modifier = Modifier.padding(end = 8.dp))
         }
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {

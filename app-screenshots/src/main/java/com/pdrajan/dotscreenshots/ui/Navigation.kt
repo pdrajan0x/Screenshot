@@ -92,7 +92,11 @@ fun DotScreenshotsNavHost(container: AppContainer) {
                 onOpenShot = { openDetail(it, ShotContext.SINGLE) },
                 onOpenCollection = { nav.navigate("list/${Uri.encode(ShotContext.collection(it))}") },
                 onSearch = { q -> nav.navigate("search?q=${Uri.encode(q)}") },
+                onEdit = { nav.navigate("edit/$it") },
             )
+        }
+        composable("edit/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { entry ->
+            EditScreen(id = entry.arguments?.getLong("id") ?: return@composable, onBack = { nav.popBackStack() })
         }
         composable(
             "list/{ctx}",

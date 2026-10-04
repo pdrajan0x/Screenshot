@@ -30,6 +30,8 @@ dependencies {
     api(libs.compose.material.icons.extended)
     api(libs.compose.ui.tooling.preview)
     api(libs.coil.compose)
+    // Frosted-glass blur behind floating controls (search bar, viewer bars).
+    api(libs.haze.blur)
     implementation(project(":core:media"))
     debugImplementation(libs.compose.ui.tooling)
 }

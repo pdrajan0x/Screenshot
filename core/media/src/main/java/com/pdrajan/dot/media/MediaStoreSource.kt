@@ -3,18 +3,12 @@ package com.pdrajan.dot.media
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
-import android.database.ContentObserver
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 
 enum class MediaType { IMAGE, VIDEO }
@@ -42,7 +36,7 @@ data class MediaItem(
     val addedAt: Long = 0L,
 )
 
-/** Reads photos, videos and screenshots from MediaStore. */
+/** Reads screenshots from MediaStore. */
 class MediaStoreSource(private val context: Context) {
 
     private val resolver: ContentResolver get() = context.contentResolver
@@ -59,40 +53,9 @@ class MediaStoreSource(private val context: Context) {
         query(imagesUri(), MediaType.IMAGE, selection, args)
     }
 
-    /** Images and videos for the gallery, newest first. */
-    suspend fun allMedia(): List<MediaItem> = withContext(Dispatchers.IO) {
-        val images = query(imagesUri(), MediaType.IMAGE, null, null)
-        val videos = query(videosUri(), MediaType.VIDEO, null, null)
-        (images + videos).sortedByDescending { it.takenAt }
-    }
-
-    /** Items in the system bin (Android 11+; empty before). */
-    suspend fun trashed(): List<MediaItem> = withContext(Dispatchers.IO) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return@withContext emptyList()
-        val images = query(imagesUri(), MediaType.IMAGE, null, null, onlyTrashed = true)
-        val videos = query(videosUri(), MediaType.VIDEO, null, null, onlyTrashed = true)
-        (images + videos).sortedByDescending { it.modifiedAt }
-    }
-
-    /** Emits whenever images or videos change on the device (debounce downstream). */
-    fun changes(): Flow<Unit> = callbackFlow {
-        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) {
-                trySend(Unit)
-            }
-        }
-        resolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer)
-        resolver.registerContentObserver(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, observer)
-        awaitClose { resolver.unregisterContentObserver(observer) }
-    }
-
     private fun imagesUri(): Uri =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
         else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-
-    private fun videosUri(): Uri =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-        else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
 
     private fun query(
         collection: Uri,

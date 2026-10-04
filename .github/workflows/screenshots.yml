@@ -1,0 +1,46 @@
+name: README screenshots
+
+# Run by hand after a release: installs the Latest APK on an emulator and captures the app's
+# main screens (tools/screenshots/take.py) for docs/screenshots.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the Latest APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download latest --pattern DotScreenshots.apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Take screenshots
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: python3 tools/screenshots/take.py docs/screenshots DotScreenshots.apk
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: readme-screenshots
+          path: docs/screenshots

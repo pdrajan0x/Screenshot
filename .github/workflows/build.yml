@@ -163,15 +163,21 @@ jobs:
           path: "**/build/reports/tests/**"
           retention-days: 7
 
-      - name: Publish rolling release
-        if: github.event_name == 'push'
+      # One release, "Latest", replaced on every push to the default branch.
+      - name: Publish the Latest release
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="latest-${GITHUB_REF_NAME//\//-}"
-          gh release delete "$tag" --yes --cleanup-tag || true
-          gh release create "$tag" dist/*.apk dist/*-mapping.txt \
-            --prerelease \
+          # Older per-branch builds and model mirrors are no longer used.
+          for t in $(gh release list --limit 100 --json tagName -q '.[].tagName'); do
+            case "$t" in
+              latest-*|llm-models-*|vlm-models-*) gh release delete "$t" --yes --cleanup-tag ;;
+            esac
+          done
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/DotScreenshots.apk \
+            --latest \
             --target "$GITHUB_SHA" \
-            --title "Dot Screenshots — latest build (${GITHUB_REF_NAME})" \
-            --notes "Built from ${GITHUB_SHA}. Download the APK on your phone and open it to install or update."
+            --title "Dot Screenshots — latest" \
+            --notes "Version 0.1.${GITHUB_RUN_NUMBER}, built from ${GITHUB_SHA::7}. Download DotScreenshots.apk on your phone and open it to install or update."

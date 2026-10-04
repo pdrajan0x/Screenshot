@@ -51,6 +51,7 @@ import androidx.lifecycle.viewModelScope
 import com.pdrajan.dot.design.DotChip
 import com.pdrajan.dot.design.DotEmptyState
 import com.pdrajan.dot.design.DotLoader
+import com.pdrajan.dot.design.DotOutlinedButton
 import com.pdrajan.dot.design.DotSearchField
 import com.pdrajan.dot.design.DotTag
 import com.pdrajan.dot.design.DotTheme
@@ -72,6 +73,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import com.pdrajan.dot.design.glassSource
+import com.pdrajan.dot.design.rememberGlass
 
 data class SearchUi(
     val query: String = "",
@@ -202,10 +210,13 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
         }
     }
 
+    val glass = rememberGlass()
+    // Results scroll under the floating search field; keep the last row clear of it.
+    val bottomSpace = WindowInsets.ime.union(WindowInsets.navigationBars).asPaddingValues().calculateBottomPadding() + 88.dp
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // Results above, the search field at the bottom within thumb reach (it rides above the keyboard).
-            Column(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.fillMaxSize().statusBarsPadding()) {
+            // Results fill the screen; the search field floats over them at the bottom, within thumb reach (it rides above the keyboard).
+            Column(Modifier.fillMaxSize().glassSource(glass)) {
                 if (ui.query.isBlank()) {
                     Column(
                         Modifier
@@ -255,6 +266,7 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                                 }
                             }
                         }
+                        Spacer(Modifier.height(bottomSpace))
                     }
                 } else {
                     Row(
@@ -281,7 +293,7 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                     } else {
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(3),
-                            contentPadding = PaddingValues(bottom = 24.dp),
+                            contentPadding = PaddingValues(bottom = bottomSpace),
                             modifier = Modifier.fillMaxSize(),
                         ) {
                             val snippet = ui.hits.firstOrNull { it.snippet != null }?.snippet
@@ -332,11 +344,8 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                             }
                             if (ui.more.isNotEmpty() && !showMore) {
                                 item(span = { GridItemSpan(maxLineSpan) }) {
-                                    TextButton(onClick = { showMore = true }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                                        Text(
-                                            "Show ${ui.more.size} weaker ${if (ui.more.size == 1) "match" else "matches"} (the words appear only in the screen text)",
-                                            color = DotTheme.extra.accent,
-                                        )
+                                    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                                        DotOutlinedButton("Show more", onClick = { showMore = true })
                                     }
                                 }
                             }
@@ -354,7 +363,8 @@ fun SearchScreen(onBack: () -> Unit, onOpenShot: (Long) -> Unit, initialQuery: S
                     vm.submit()
                     keyboard?.hide()
                 },
-                modifier = Modifier.imePadding().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
+                glass = glass,
+                modifier = Modifier.align(Alignment.BottomCenter).imePadding().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
             )
         }
     }

@@ -11,52 +11,47 @@ import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Camera details for the info panel. */
-data class PhotoInfo(
-    val camera: String? = null,
-    val lens: String? = null,
-    val aperture: String? = null,
-    val exposure: String? = null,
-    val iso: String? = null,
-    val focalLength: String? = null,
+/** File details for the viewer's info panel; null where the phone doesn't record it. */
+data class FileDetails(
+    /** Folder relative to shared storage, e.g. "DCIM/Screenshots". */
+    val folder: String? = null,
+    val mimeType: String? = null,
     val latitude: Double? = null,
     val longitude: Double? = null,
 )
 
 object MediaInfo {
 
-    suspend fun read(context: Context, uri: Uri): PhotoInfo = withContext(Dispatchers.IO) {
+    suspend fun read(context: Context, uri: Uri): FileDetails = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        var folder: String? = null
+        var mime: String? = null
         runCatching {
+            val columns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                arrayOf(MediaStore.MediaColumns.RELATIVE_PATH, MediaStore.MediaColumns.MIME_TYPE)
+            } else {
+                @Suppress("DEPRECATION")
+                arrayOf(MediaStore.MediaColumns.DATA, MediaStore.MediaColumns.MIME_TYPE)
+            }
+            resolver.query(uri, columns, null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val path = c.getString(0)
+                    folder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) path?.trimEnd('/')
+                    else path?.substringBeforeLast('/')?.substringAfter("/0/")
+                    mime = c.getString(1)
+                }
+            }
+        }
+        val latLong = runCatching {
             // Android 10+ strips GPS from EXIF unless the app holds ACCESS_MEDIA_LOCATION and asks for the original.
             val source = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && hasLocationAccess(context)) {
                 runCatching { MediaStore.setRequireOriginal(uri) }.getOrDefault(uri)
             } else {
                 uri
             }
-            context.contentResolver.openInputStream(source)?.use { input ->
-                val exif = ExifInterface(input)
-                val make = exif.getAttribute(ExifInterface.TAG_MAKE)?.trim()
-                val model = exif.getAttribute(ExifInterface.TAG_MODEL)?.trim()
-                val camera = when {
-                    model == null -> make
-                    make == null || model.startsWith(make, ignoreCase = true) -> model
-                    else -> "$make $model"
-                }
-                val latLong = exif.latLong
-                PhotoInfo(
-                    camera = camera,
-                    lens = exif.getAttribute(ExifInterface.TAG_LENS_MODEL),
-                    aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0).takeIf { it > 0 }?.let { "ƒ/%.1f".format(it) },
-                    exposure = exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0.0).takeIf { it > 0 }?.let {
-                        if (it >= 1) "%.1fs".format(it) else "1/${Math.round(1 / it)}"
-                    },
-                    iso = exif.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY)?.let { "ISO $it" },
-                    focalLength = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0).takeIf { it > 0 }?.let { "%.1f mm".format(it) },
-                    latitude = latLong?.getOrNull(0),
-                    longitude = latLong?.getOrNull(1),
-                )
-            } ?: PhotoInfo()
-        }.getOrDefault(PhotoInfo())
+            resolver.openInputStream(source)?.use { ExifInterface(it).latLong }
+        }.getOrNull()
+        FileDetails(folder, mime, latLong?.getOrNull(0), latLong?.getOrNull(1))
     }
 
     fun hasLocationAccess(context: Context): Boolean =

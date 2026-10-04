@@ -11,8 +11,8 @@ import java.io.File
 import java.nio.LongBuffer
 
 /**
- * What both apps do on first run: tokenize every built-in prompt (screenshot categories, photo
- * tags) and embed them with the text encoder in batches of 8. Skipped when the model is absent.
+ * What the app does on first run: tokenize every built-in prompt (screenshot categories, picture
+ * keywords) and embed them with the text encoder in batches of 8. Skipped when the model is absent.
  */
 class PromptEmbeddingTest {
 
@@ -22,8 +22,8 @@ class PromptEmbeddingTest {
     @Test
     fun allPromptsTokenizeAndEmbedInBatches() {
         val tokenizer = File(System.getProperty("clip.vocab")).inputStream().use { ClipTokenizer(it) }
-        val prompts = Categories.ALL.flatMap { it.prompts } + Categories.BACKGROUND_PROMPTS +
-            PhotoTags.ALL.flatMap { it.prompts } + PhotoTags.BACKGROUND
+        val words = PictureWords.parse(File(System.getProperty("clip.pictureWords")).readText())
+        val prompts = Categories.ALL.flatMap { it.prompts } + Categories.BACKGROUND_PROMPTS + words.prompts(forScreenshots = true)
         val ids = prompts.map { p -> tokenizer.tokenize(p).also { assertEquals(p, 77, it.size) } }
 
         assumeTrue("model not exported", textModel.exists())

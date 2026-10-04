@@ -113,6 +113,25 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.automirrored.rounded.ManageSearch
+import androidx.compose.material.icons.rounded.CalendarToday
+import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.LocationOff
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Tag
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.pdrajan.dot.design.glass
+import com.pdrajan.dot.design.glassSource
+import com.pdrajan.dot.design.rememberGlass
+import com.pdrajan.dot.media.FileDetails
+import com.pdrajan.dot.media.MediaInfo
 
 private fun shotUri(id: Long): Uri =
     ContentUris.withAppendedId(
@@ -179,6 +198,7 @@ fun DetailScreen(
     onOpenShot: (Long) -> Unit,
     onOpenCollection: (Long) -> Unit,
     onSearch: (String) -> Unit,
+    onEdit: (Long) -> Unit,
 ) {
     val vm = containerViewModel(key = "detail-$initialId-$context") { DetailViewModel(it, initialId, context) }
     val ids by vm.ids.collectAsStateWithLifecycle()
@@ -194,6 +214,8 @@ fun DetailScreen(
     BackHandler(enabled = detailsShown) { requestDetails(open = false) }
     val ctx = LocalContext.current
     val deleter = rememberDeleteLauncher()
+    // The screenshot (and its details) blur behind the top and bottom controls so they stay readable.
+    val glass = rememberGlass()
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         val list = ids
@@ -211,7 +233,7 @@ fun DetailScreen(
                     state = pager,
                     key = { list.getOrElse(it) { -1L } },
                     beyondViewportPageCount = 1,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().glassSource(glass),
                 ) { page ->
                     val id = list.getOrNull(page) ?: return@HorizontalPager
                     ShotPage(
@@ -233,10 +255,7 @@ fun DetailScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(
-                        if (detailsShown) Brush.verticalGradient(listOf(Color.Black, Color.Black.copy(alpha = 0.92f)))
-                        else Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)),
-                    )
+                    .glass(glass, Color.Black, tintAlpha = if (detailsShown) 0.72f else 0.4f)
                     .statusBarsPadding()
                     .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -253,7 +272,7 @@ fun DetailScreen(
                     IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More", tint = Color.White) }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(
-                            text = { Text("Edit in…") },
+                            text = { Text("Edit in another app") },
                             leadingIcon = { Icon(Icons.Rounded.Edit, null) },
                             onClick = { menu = false; detail?.let { ctx.startSafely(MediaActions.editIntent(it.shot.uri)) } },
                         )
@@ -271,7 +290,7 @@ fun DetailScreen(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
+                    .glass(glass, Color.Black, tintAlpha = 0.45f)
                     .navigationBarsPadding(),
             ) {
                 // A handle: tap it (or swipe the screenshot up) for the details.
@@ -317,6 +336,7 @@ fun DetailScreen(
                         "Favourite",
                         tint = if (d?.shot?.favorite == true) DotTheme.extra.accent else Color.White,
                     ) { vm.toggleFavorite() }
+                    ViewerAction(Icons.Rounded.Edit, "Edit") { d?.let { onEdit(it.shot.id) } }
                     ViewerAction(Icons.Rounded.Info, "Details") { requestDetails(open = true) }
                     ViewerAction(Icons.Rounded.Delete, "Delete") {
                         val shot = d?.shot ?: return@ViewerAction
@@ -396,7 +416,7 @@ private fun ShotPage(
 @Composable
 private fun ViewerAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color = Color.White, onClick: () -> Unit) {
     Column(
-        Modifier.clip(CircleShape).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier.clip(CircleShape).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(icon, contentDescription = label, tint = tint)
@@ -448,9 +468,35 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
                 val host = runCatching { Uri.parse(url).host?.removePrefix("www.") }.getOrNull() ?: "page"
                 DotOutlinedButton("Open $host", onClick = { ctx.startSafely(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }, icon = Icons.AutoMirrored.Rounded.OpenInNew)
             }
-            if (d.keywords.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                KeywordChips(d.keywords, onClick = onSearch)
+        }
+        Spacer(Modifier.height(8.dp))
+
+        SheetSection("Details") { FileDetailsList(d) }
+
+        // Keywords stay tucked away until asked for.
+        var showKeywords by rememberSaveable(d.shot.id) { mutableStateOf(false) }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
+            DotOutlinedButton(
+                if (showKeywords) "Hide keywords" else "Show keywords",
+                onClick = { showKeywords = !showKeywords },
+                icon = Icons.Rounded.Tag,
+            )
+            AnimatedVisibility(showKeywords) {
+                Column(Modifier.padding(top = 12.dp)) {
+                    when {
+                        d.keywords.isNotEmpty() -> KeywordChips(d.keywords, onClick = onSearch)
+                        d.shot.state == IndexState.PENDING -> Text(
+                            "Not read yet — keywords come after it's processed.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        else -> Text(
+                            "No picture keywords for this one; search finds it by the words on screen.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -522,21 +568,6 @@ private fun DetailSheet(d: ShotDetail, vm: DetailViewModel, onOpenShot: (Long) -
                 }
             }
         }
-
-        HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
-        SheetSection("Details") {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(d.shot.name, style = MaterialTheme.typography.bodyMedium)
-                Text("${d.shot.width} × ${d.shot.height} · ${formatBytes(d.shot.sizeBytes)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (d.shot.categories.isNotEmpty()) {
-                    Text(
-                        d.shot.categories.joinToString(" · ") { Categories.byId(it)?.label ?: it },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
     }
 
     if (picker) {
@@ -553,6 +584,65 @@ private fun formatBytes(bytes: Long): String = when {
     bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
     bytes >= 1_000 -> "${bytes / 1_000} KB"
     else -> "$bytes B"
+}
+
+/** When it was taken, how big it is, where the file lives and (if the file records it) where it was taken. */
+@Composable
+private fun FileDetailsList(d: ShotDetail) {
+    val ctx = LocalContext.current
+    var locationAllowed by remember { mutableStateOf(MediaInfo.hasLocationAccess(ctx)) }
+    val allowLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { locationAllowed = it }
+    val info by produceState<FileDetails?>(null, d.shot.id, locationAllowed) { value = MediaInfo.read(ctx, d.shot.uri) }
+    val shot = d.shot
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        InfoRow(Icons.Rounded.CalendarToday, "Taken", DateLabels.dateTime(shot.takenAt))
+        val megapixels = shot.width.toLong() * shot.height / 1_000_000.0
+        val format = info?.mimeType?.substringAfter('/')?.uppercase()?.let { "$it · " }.orEmpty()
+        InfoRow(
+            Icons.Rounded.Image,
+            "Size",
+            "$format${formatBytes(shot.sizeBytes)} · ${shot.width} × ${shot.height}" + if (megapixels >= 0.1) " · ${"%.1f".format(megapixels)} MP" else "",
+        )
+        InfoRow(Icons.Rounded.Folder, "File", shot.name + (info?.folder?.let { "\n$it" } ?: ""))
+        val lat = info?.latitude
+        val lon = info?.longitude
+        when {
+            lat != null && lon != null -> InfoRow(
+                Icons.Rounded.LocationOn, "Location", "%.5f, %.5f".format(lat, lon), action = "Map",
+                onAction = { ctx.startSafely(Intent(Intent.ACTION_VIEW, Uri.parse("geo:$lat,$lon?q=$lat,$lon"))) },
+            )
+            !locationAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> InfoRow(
+                Icons.Rounded.LocationOn, "Location", "Allow access to photo locations to see it", action = "Allow",
+                onAction = { allowLocation.launch(Manifest.permission.ACCESS_MEDIA_LOCATION) },
+            )
+            info != null -> InfoRow(Icons.Rounded.LocationOff, "Location", "Not saved in this screenshot")
+        }
+        if (shot.categories.isNotEmpty()) {
+            InfoRow(Icons.Rounded.Category, "Categories", shot.categories.joinToString(" · ") { Categories.byId(it)?.label ?: it })
+        }
+        InfoRow(
+            Icons.AutoMirrored.Rounded.ManageSearch,
+            "Search",
+            when (shot.state) {
+                IndexState.INDEXED -> if (d.text.isBlank()) "Searchable by picture" else "Searchable · ${d.text.split(Regex("\\s+")).count { it.isNotBlank() }} words read"
+                IndexState.PENDING -> "Waiting to be read"
+                IndexState.FAILED -> "Couldn't be read"
+            },
+        )
+    }
+}
+
+@Composable
+private fun InfoRow(icon: ImageVector, label: String, value: String, action: String? = null, onAction: () -> Unit = {}) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (action != null) TextButton(onClick = onAction) { Text(action, color = DotTheme.extra.accent) }
+    }
 }
 
 /** Which app the screenshot is from (the file name, the user, or the screen's own words); tap to correct it. */
