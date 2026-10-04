@@ -167,7 +167,7 @@ def report_logs(label):
 
 
 def wait_until_read(max_minutes=40):
-    """Settings shows "N of N screenshots searchable" and no "… left" once everything is read and described."""
+    """Done when Settings shows no progress line ("Reading your screenshots · N left", "Getting ready…")."""
     def open_settings():
         if not in_front():
             launch()
@@ -175,9 +175,11 @@ def wait_until_read(max_minutes=40):
         wait(2)
 
     open_settings()
-    deadline = time.time() + max_minutes * 60
+    started = time.time()
+    deadline = started + max_minutes * 60
     reports = 0
-    misses = 0
+    seen_busy = False
+    idle = 0
     while time.time() < deadline:
         if not in_front():
             print("!! the app isn't in front", flush=True)
@@ -186,23 +188,26 @@ def wait_until_read(max_minutes=40):
                 reports += 1
             open_settings()
         texts = [n.get("text") or "" for n in ui_nodes()]
-        if not any("screenshots searchable" in t for t in texts):
-            misses += 1
+        if "SETTINGS" not in texts:
             print(f"!! not on Settings (seen: {[t for t in texts if t][:6]})", flush=True)
-            if misses % 3 == 0:
-                sh("input keyevent 4")
-                wait(2)
-                open_settings()
-        busy = [t for t in texts if " left" in t or "waiting" in t]
-        for t in texts:
-            m = re.search(r"(\d+) of (\d+) screenshots searchable", t)
-            if m:
-                print("status:", m.group(0), "|", busy[0] if busy else "done", flush=True)
-                if m.group(1) == m.group(2) and int(m.group(2)) > 0 and not busy:
-                    return True
-        tap("Do it now", exact=True, required=False)
+            sh("input keyevent 4")
+            wait(2)
+            open_settings()
+            continue
+        busy = [t for t in texts if " left" in t or "waiting" in t or "Getting ready" in t or "Reading your screenshots" in t]
+        print("status:", busy[0] if busy else "idle", flush=True)
+        if busy:
+            seen_busy = True
+            idle = 0
+            if any("waiting" in t for t in busy):
+                tap("Do it now", exact=True, required=False)
+        else:
+            idle += 1
+            # Twice idle in a row, once work was seen (or long enough that it would have started).
+            if idle >= 2 and (seen_busy or time.time() - started > 180):
+                return True
         wait(20)
-    print("!! not every screenshot was read in time")
+    print("!! not every screenshot was read in time", flush=True)
     return False
 
 
