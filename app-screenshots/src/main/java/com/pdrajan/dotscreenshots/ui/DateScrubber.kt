@@ -42,6 +42,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pdrajan.dot.design.DotMatrix
 import com.pdrajan.dot.design.DotTheme
+import com.pdrajan.dot.design.glass
+import dev.chrisbanes.haze.HazeState
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.Shape
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -68,6 +72,8 @@ fun DateScrubber(
     topInset: androidx.compose.ui.unit.Dp = 72.dp,
     /** Space kept free at the bottom (the floating search bar). */
     bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
+    /** Frosted glass like the search bar (the grid must be its glass source). */
+    glass: HazeState? = null,
 ) {
     if (marks.size < 2) return
     val scope = rememberCoroutineScope()
@@ -110,9 +116,14 @@ fun DateScrubber(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.offset { IntOffset(0, y) },
             ) {
+                val fill = MaterialTheme.colorScheme.surfaceContainerHigh
+                val edge = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                // See-through and blurred over the grid, like the search bar.
+                fun Modifier.frosted(shape: Shape) =
+                    if (glass != null) glass(glass, fill, shape).border(1.dp, edge, shape) else clip(shape).background(fill)
                 if (dragging) {
                     Box(
-                        Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        Modifier.frosted(RoundedCornerShape(12.dp))
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                     ) {
                         Text(label, fontFamily = DotMatrix, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface)
@@ -122,8 +133,7 @@ fun DateScrubber(
                 // The handle: a dark pill with the red dot, Nothing-style.
                 Box(
                     Modifier.size(width = 28.dp, height = handleHeight)
-                        .clip(RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .frosted(RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp))
                         .pointerInput(marks) {
                             detectVerticalDragGestures(
                                 onDragStart = { dragging = true; dragFraction = currentScroll },

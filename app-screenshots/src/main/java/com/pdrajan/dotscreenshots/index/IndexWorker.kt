@@ -53,10 +53,12 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val stopped = { isStopped || power.blocker(foreground = false) != null }
         var progressed = 0
         if (blocker == null) {
-            while (!stopped() && System.currentTimeMillis() < deadline) {
-                val n = container.processStep(userAsked = false, foreground = false, deadline = deadline, isStopped = stopped)
-                if (n == 0) break
-                progressed += n
+            container.running {
+                while (!stopped() && System.currentTimeMillis() < deadline) {
+                    val n = container.processStep(userAsked = false, foreground = false, deadline = deadline, isStopped = stopped)
+                    if (n == 0) break
+                    progressed += n
+                }
             }
         }
 

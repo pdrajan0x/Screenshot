@@ -1,6 +1,11 @@
 package com.pdrajan.dot.ml
 
+import android.content.Context
 import android.graphics.Bitmap
+import com.google.android.gms.common.moduleinstall.InstallStatusListener
+import com.google.android.gms.common.moduleinstall.ModuleInstall
+import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
+import com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.MlKitException
 import com.google.mlkit.vision.common.InputImage
@@ -9,7 +14,11 @@ import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.pdrajan.dot.engine.OcrLine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.io.Closeable
+import kotlin.coroutines.resume
 import java.util.concurrent.TimeUnit
 
 /** Text read from a screenshot: joined top to bottom, plus each line with its position. */
@@ -23,9 +32,7 @@ data class OcrResult(val text: String, val lines: List<OcrLine>)
  */
 class TextReader(val hindi: Boolean) : Closeable {
 
-    private val recognizer: TextRecognizer = TextRecognition.getClient(
-        if (hindi) DevanagariTextRecognizerOptions.Builder().build() else TextRecognizerOptions.DEFAULT_OPTIONS,
-    )
+    private val recognizer: TextRecognizer = client(hindi)
 
     /** Blocking; call from a background thread. The screen's text, top to bottom. */
     fun read(bitmap: Bitmap): String = readLines(bitmap).text
@@ -109,6 +116,60 @@ class TextReader(val hindi: Boolean) : Closeable {
     override fun close() = recognizer.close()
 
     companion object {
+        private fun client(hindi: Boolean): TextRecognizer = TextRecognition.getClient(
+            if (hindi) DevanagariTextRecognizerOptions.Builder().build() else TextRecognizerOptions.DEFAULT_OPTIONS,
+        )
+
+        /** Whether Play services has the text model on the phone; null when it can't say (no Play services). Blocking. */
+        fun modelInstalled(context: Context, hindi: Boolean): Boolean? {
+            val recognizer = client(hindi)
+            return try {
+                Tasks.await(ModuleInstall.getClient(context).areModulesAvailable(recognizer), 20, TimeUnit.SECONDS).areModulesAvailable()
+            } catch (e: Exception) {
+                null
+            } finally {
+                recognizer.close()
+            }
+        }
+
+        /**
+         * Asks Play services to fetch the text model now rather than whenever it gets round to it,
+         * and waits for it. [onProgress] gets 0..1 while it downloads (null when unknown). True
+         * once it's installed, false if Play services can't get it.
+         */
+        suspend fun installModel(context: Context, hindi: Boolean, onProgress: (Float?) -> Unit = {}): Boolean {
+            if (withContext(Dispatchers.IO) { modelInstalled(context, hindi) } == true) return true
+            val recognizer = client(hindi)
+            val installer = ModuleInstall.getClient(context)
+            try {
+                return suspendCancellableCoroutine { cont ->
+                    fun finish(ok: Boolean, listener: InstallStatusListener?) {
+                        listener?.let { installer.unregisterListener(it) }
+                        if (cont.isActive) cont.resume(ok)
+                    }
+                    val listener = object : InstallStatusListener {
+                        override fun onInstallStatusUpdated(update: ModuleInstallStatusUpdate) {
+                            when (update.installState) {
+                                ModuleInstallStatusUpdate.InstallState.STATE_COMPLETED -> finish(true, this)
+                                ModuleInstallStatusUpdate.InstallState.STATE_FAILED,
+                                ModuleInstallStatusUpdate.InstallState.STATE_CANCELED -> finish(false, this)
+                                else -> update.progressInfo?.let { p ->
+                                    onProgress(if (p.totalBytesToDownload > 0) p.bytesDownloaded.toFloat() / p.totalBytesToDownload else null)
+                                }
+                            }
+                        }
+                    }
+                    val request = ModuleInstallRequest.newBuilder().addApi(recognizer).setListener(listener).build()
+                    installer.installModules(request)
+                        .addOnSuccessListener { if (it.areModulesAlreadyInstalled()) finish(true, listener) }
+                        .addOnFailureListener { finish(false, listener) }
+                    cont.invokeOnCancellation { installer.unregisterListener(listener) }
+                }
+            } finally {
+                recognizer.close()
+            }
+        }
+
         /**
          * True when OCR failed because Play services is still fetching the model: a reason to retry
          * later rather than mark the screenshot as failed.

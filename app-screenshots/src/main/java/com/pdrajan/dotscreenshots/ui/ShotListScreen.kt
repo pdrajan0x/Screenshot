@@ -146,6 +146,11 @@ class ShotListViewModel(private val c: AppContainer, val ctx: String) : ViewMode
     }
 
     fun setColumns(n: Int) = c.settings.setGridColumns(n)
+
+    /** The viewer about to open swipes through this list in this order, from its first frame. */
+    fun rememberOrder() {
+        c.viewerOrder = shots.value.map { it.id }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -237,7 +242,13 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
                     shot = shot,
                     selected = shot.id in selection,
                     selectionMode = selectionMode,
-                    onClick = { if (selectionMode) vm.toggle(shot.id) else onOpenShot(shot.id) },
+                    onClick = {
+                        if (selectionMode) vm.toggle(shot.id)
+                        else {
+                            vm.rememberOrder()
+                            onOpenShot(shot.id)
+                        }
+                    },
                 )
             }
         }

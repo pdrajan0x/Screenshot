@@ -5,6 +5,12 @@ import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,7 +45,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -61,7 +67,8 @@ import com.pdrajan.dot.design.ThemeMode
 import com.pdrajan.dot.media.OldModelFiles
 import com.pdrajan.dotscreenshots.BuildConfig
 import com.pdrajan.dotscreenshots.data.IndexCounts
-import com.pdrajan.dotscreenshots.index.IndexProgress
+import com.pdrajan.dotscreenshots.AppContainer
+import com.pdrajan.dotscreenshots.TextModelState
 import com.pdrajan.dotscreenshots.index.ModelDownload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -77,21 +84,17 @@ fun SettingsScreen(onBack: () -> Unit) {
     val theme by c.settings.theme.collectAsStateWithLifecycle()
     val hindi by c.settings.readHindi.collectAsStateWithLifecycle()
     val processing by c.settings.processing.collectAsStateWithLifecycle()
-    val countsFlow = remember { c.repo.observeCounts() }
-    val counts by countsFlow.collectAsStateWithLifecycle(IndexCounts(0, 0, 0, 0))
     var confirmReindex by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
     var diagnostics by remember { mutableStateOf(false) }
-    val progress by c.engine.progress.collectAsStateWithLifecycle()
-    val lastError by c.engine.lastError.collectAsStateWithLifecycle()
-    val backlogRunning by c.backlogRunning.collectAsStateWithLifecycle()
     val showDescriptions by c.settings.showDescriptions.collectAsStateWithLifecycle()
     val modelOverMobile by c.settings.modelOverMobile.collectAsStateWithLifecycle()
-    // The description model's download, followed while Settings is open.
-    val model by produceState<ModelDownload.State>(ModelDownload.State.Checking) {
+    // Follows the description model's download while Settings is open. The rows below read
+    // c.modelState themselves, so only they update, not the whole screen.
+    LaunchedEffect(Unit) {
         while (true) {
-            value = c.checkModel()
-            delay(if (value is ModelDownload.State.Ready) 10_000 else 1_000)
+            val state = c.checkModel()
+            delay(if (state is ModelDownload.State.Ready) 15_000 else 1_000)
         }
     }
 
@@ -115,17 +118,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             DotLargeTitle("SETTINGS", Modifier.padding(horizontal = 20.dp))
             Spacer(Modifier.height(16.dp))
             // Processing lives here, not on the home screen: what's left, why it waits, "Do it now".
-            StatusStrip(
-                progress = progress,
-                counts = counts,
-                backlogRunning = backlogRunning,
-                modelReady = model is ModelDownload.State.Ready,
-                lastError = lastError,
-                waitingFor = c.power.blocker() ?: if (!c.power.backlogAllowed()) "older ones are done while charging" else null,
-                onProcessAll = c::processAllNow,
-                onStop = c::stopProcessing,
-                onDetails = { diagnostics = true },
-            )
+            StatusStrip(c, onDetails = { diagnostics = true })
 
             SectionLabel("Appearance", Modifier.padding(horizontal = 20.dp))
             Row(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -137,19 +130,19 @@ fun SettingsScreen(onBack: () -> Unit) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             SectionLabel("Descriptions", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            ModelRow(model, onDownload = c::startModelDownload)
+            ModelRow(c)
             SettingsSwitchRow(
                 title = "Download over mobile data",
                 subtitle = "Otherwise the model (${c.hub.download.totalBytes / 1_000_000} MB, once) waits for Wi-Fi.",
                 checked = modelOverMobile,
                 onCheckedChange = {
                     c.settings.setModelOverMobile(it)
-                    if (model !is ModelDownload.State.Ready) c.startModelDownload()
+                    if (c.modelState.value !is ModelDownload.State.Ready) c.startModelDownload()
                 },
             )
             SettingsSwitchRow(
-                title = "Show descriptions and keywords",
-                subtitle = "In each screenshot's details. Search uses them either way.",
+                title = "Show description and keywords",
+                subtitle = "When a screenshot is open. Off: they're never shown anywhere, but search still uses them.",
                 checked = showDescriptions,
                 onCheckedChange = c.settings::setShowDescriptions,
             )
@@ -208,18 +201,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             SectionLabel("Status", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            val avg = c.settings.avgIndexMillis
-            SettingsRow(
-                title = "${counts.indexed} of ${counts.total} screenshots searchable",
-                subtitle = buildString {
-                    if (counts.pending > 0) append("${counts.pending} waiting · ")
-                    if (counts.failed > 0) append("${counts.failed} couldn't be read · ")
-                    if (avg > 0) append("~${"%.1f".format(avg / 1000.0)} s per screenshot · ")
-                    append("index ${c.repo.databaseSizeBytes() / 1_000_000} MB")
-                },
-                icon = Icons.Rounded.Storage,
-                onClick = {},
-            )
+            LibraryRow(c)
             var oldModels by remember { mutableStateOf(OldModelFiles.found(ctx)) }
             if (oldModels.isNotEmpty()) {
                 val mb = oldModels.sumOf { runCatching { it.length() }.getOrDefault(0L) } / 1_000_000
@@ -293,51 +275,107 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 }
 
+/** What the status strip says; [kind] changes only when it says something else (not each count). */
+private sealed class Status(val kind: String) {
+    data class Text(val progress: Float?) : Status("text")
+    data class Working(val reading: Boolean, val left: Int, val fraction: Float?) : Status(if (reading) "reading" else "describing")
+    data class Error(val message: String) : Status("error")
+    data class Waiting(val left: Int, val reason: String?) : Status("waiting")
+    data object Idle : Status("idle")
+}
+
 /** One line about the library: how many screenshots are left, why it's waiting, or what went wrong. */
 @Composable
-private fun StatusStrip(
-    progress: IndexProgress,
-    counts: IndexCounts,
-    backlogRunning: Boolean,
-    modelReady: Boolean,
-    lastError: String?,
-    waitingFor: String?,
-    onProcessAll: () -> Unit,
-    onStop: () -> Unit,
-    onDetails: () -> Unit,
-) {
-    val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-    // Screenshots still to read, plus read ones still to describe (once the model is here).
-    val left = counts.pending + if (modelReady) counts.updating else 0
-    val total = counts.total
-    val done = (total - left).coerceAtLeast(0)
-    val stop: @Composable () -> Unit = { if (backlogRunning) TextButton(onClick = onStop) { Text("Stop", color = DotTheme.extra.accent) } }
-    when {
-        lastError != null -> DotProgressStrip(
-            text = lastError,
-            modifier = modifier,
-            action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
+private fun StatusStrip(c: AppContainer, onDetails: () -> Unit) {
+    val counts by remember { c.repo.observeCounts() }.collectAsStateWithLifecycle(IndexCounts(0, 0, 0, 0))
+    val runs by c.activeRuns.collectAsStateWithLifecycle()
+    val backlogRunning by c.backlogRunning.collectAsStateWithLifecycle()
+    val model by c.modelState.collectAsStateWithLifecycle()
+    val text by c.textModel.collectAsStateWithLifecycle()
+    val lastError by c.engine.lastError.collectAsStateWithLifecycle()
+    // Read ones are described once the model is here; until then the model row says why.
+    val toDescribe = if (model is ModelDownload.State.Ready) counts.updating else 0
+    val total = counts.total.coerceAtLeast(1)
+    val fetching = text as? TextModelState.Fetching
+    val status = when {
+        counts.pending > 0 && fetching != null -> Status.Text(fetching.progress)
+        // Busy for the whole run (not per batch), so the line doesn't flicker between batches.
+        runs > 0 && counts.pending > 0 -> Status.Working(true, counts.pending, (total - counts.pending).toFloat() / total)
+        runs > 0 && toDescribe > 0 -> Status.Working(false, toDescribe, (total - toDescribe).toFloat() / total)
+        lastError != null -> Status.Error(lastError!!)
+        counts.pending + toDescribe > 0 -> Status.Waiting(
+            counts.pending + toDescribe,
+            c.power.blocker() ?: if (!c.power.backlogAllowed()) "older ones are done while charging" else null,
         )
-        progress.running -> DotProgressStrip(
-            text = "Reading your screenshots · $left left",
-            modifier = modifier,
-            progress = if (total > 0) done.toFloat() / total else null,
-            action = stop,
-        )
-        left > 0 -> DotProgressStrip(
-            text = "$left screenshots waiting" + (waitingFor?.let { " · $it" } ?: ""),
-            modifier = modifier,
-            action = { TextButton(onClick = onProcessAll) { Text("Do it now", color = DotTheme.extra.accent) } },
-        )
+        else -> Status.Idle
     }
+    val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+    AnimatedContent(
+        targetState = status,
+        contentKey = { it.kind },
+        transitionSpec = { fadeIn(tween(220, 60)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false) },
+        label = "status",
+    ) { s ->
+        when (s) {
+            is Status.Text -> DotProgressStrip(
+                text = "Getting the text reader from Google Play services" + (s.progress?.let { " · ${(it * 100).toInt()}%" } ?: "…"),
+                modifier = modifier,
+                progress = s.progress,
+            )
+            is Status.Working -> DotProgressStrip(
+                text = (if (s.reading) "Reading screenshots" else "Describing screenshots") + " · ${s.left} left",
+                modifier = modifier,
+                progress = s.fraction,
+                action = { if (backlogRunning) TextButton(onClick = c::stopProcessing) { Text("Stop", color = DotTheme.extra.accent) } },
+            )
+            is Status.Error -> DotProgressStrip(
+                text = s.message,
+                modifier = modifier,
+                action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
+            )
+            is Status.Waiting -> DotProgressStrip(
+                text = "${s.left} screenshots waiting" + (s.reason?.let { " · $it" } ?: ""),
+                modifier = modifier,
+                action = { TextButton(onClick = c::processAllNow) { Text("Do it now", color = DotTheme.extra.accent) } },
+            )
+            Status.Idle -> Spacer(Modifier.height(0.dp))
+        }
+    }
+}
+
+/** How much of the library is searchable, and how the index is doing. */
+@Composable
+private fun LibraryRow(c: AppContainer) {
+    val counts by remember { c.repo.observeCounts() }.collectAsStateWithLifecycle(IndexCounts(0, 0, 0, 0))
+    val avg = c.settings.avgIndexMillis
+    val indexMb = remember(counts.total, counts.indexed) { c.repo.databaseSizeBytes() / 1_000_000 }
+    SettingsRow(
+        title = "${counts.indexed} of ${counts.total} screenshots searchable",
+        subtitle = buildString {
+            if (counts.pending > 0) append("${counts.pending} waiting · ")
+            if (counts.failed > 0) append("${counts.failed} couldn't be read · ")
+            if (avg > 0) append("~${"%.1f".format(avg / 1000.0)} s per screenshot · ")
+            append("index $indexMb MB")
+        },
+        icon = Icons.Rounded.Storage,
+        onClick = {},
+    )
 }
 
 /** The description model: downloading, waiting for Wi-Fi, ready, or a button to (re)start it. */
 @Composable
-private fun ModelRow(state: ModelDownload.State, onDownload: () -> Unit) {
+private fun ModelRow(c: AppContainer) {
+    val current by c.modelState.collectAsStateWithLifecycle()
+    val onDownload = c::startModelDownload
     val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
     fun mb(bytes: Long) = bytes / 1_000_000
-    when (state) {
+    // Only a change of kind (downloading → ready) animates; byte counts just update.
+    AnimatedContent(
+        targetState = current,
+        contentKey = { it::class },
+        transitionSpec = { fadeIn(tween(220, 60)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false) },
+        label = "model",
+    ) { state -> when (state) {
         ModelDownload.State.Ready -> SettingsRow(
             title = "Description model ready",
             subtitle = "Florence-2-base, on this phone. Describes what's in each screenshot for search.",
@@ -369,5 +407,5 @@ private fun ModelRow(state: ModelDownload.State, onDownload: () -> Unit) {
             onClick = onDownload,
             trailing = { TextButton(onClick = onDownload) { Text("Download", color = DotTheme.extra.accent) } },
         )
-    }
+    } }
 }

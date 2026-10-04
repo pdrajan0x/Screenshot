@@ -54,7 +54,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.pdrajan.dot.design.DotTheme
+import com.pdrajan.dot.design.MediaThumb
 import com.pdrajan.dot.design.MediaThumbnail
+import com.pdrajan.dot.design.MediaThumbs
 import com.pdrajan.dot.engine.Entity
 import com.pdrajan.dot.engine.EntityType
 import com.pdrajan.dot.media.MediaActions
@@ -69,6 +71,9 @@ fun groupByDay(shots: List<Shot>): List<Pair<String, List<Shot>>> {
     return shots.groupBy { com.pdrajan.dot.design.DateLabels.day(it.takenAt, today) }.toList()
 }
 
+/** Key of a screenshot's picture shared between the grids and the viewer. */
+fun shotKey(id: Long) = "shot-$id"
+
 @Composable
 fun ShotThumb(
     shot: Shot,
@@ -81,7 +86,9 @@ fun ShotThumb(
     overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {},
 ) {
     MediaThumbnail(
-        model = shot.uri,
+        model = MediaThumb(shot.uri),
+        memoryCacheKey = MediaThumbs.cacheKey(shot.id),
+        sharedKey = shotKey(shot.id),
         modifier = modifier.padding(1.dp),
         contentDescription = shot.app ?: "Screenshot",
         selected = selected,

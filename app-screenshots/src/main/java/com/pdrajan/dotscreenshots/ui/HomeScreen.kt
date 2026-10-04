@@ -68,6 +68,7 @@ import com.pdrajan.dot.design.DotEmptyState
 import com.pdrajan.dot.design.DotLargeTitle
 import com.pdrajan.dot.design.DotSearchPill
 import com.pdrajan.dot.design.DotTheme
+import com.pdrajan.dot.design.MediaThumb
 import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.design.SectionLabel
 import com.pdrajan.dot.design.glassSource
@@ -155,6 +156,11 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun setColumns(n: Int) = c.settings.setGridColumns(n)
+
+    /** The viewer about to open swipes through the grid in this order, from its first frame. */
+    fun rememberOrder() {
+        c.viewerOrder = shots.value.map { it.id }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -292,7 +298,13 @@ fun HomeScreen(
                         shot = shot,
                         selected = shot.id in selection,
                         selectionMode = selectionMode,
-                        onClick = { if (selectionMode) vm.toggle(shot.id) else onOpenShot(shot.id) },
+                        onClick = {
+                            if (selectionMode) vm.toggle(shot.id)
+                            else {
+                                vm.rememberOrder()
+                                onOpenShot(shot.id)
+                            }
+                        },
                     )
                 }
             }
@@ -311,6 +323,7 @@ fun HomeScreen(
                     Modifier.align(Alignment.CenterEnd),
                     topInset = padding.calculateTopPadding() + 88.dp,
                     bottomInset = searchSpace,
+                    glass = glass,
                 )
             }
         }
@@ -349,7 +362,7 @@ private fun CollectionsRow(
 private fun CollectionCard(name: String, count: Int, cover: Uri?, onClick: () -> Unit, favorite: Boolean = false) {
     Column(Modifier.width(128.dp)) {
         Box {
-            MediaThumbnail(model = cover, cornerRadius = 18.dp, aspectRatio = 1f, onClick = onClick, modifier = Modifier.clip(RoundedCornerShape(18.dp)))
+            MediaThumbnail(model = cover?.let { MediaThumb(it) }, cornerRadius = 18.dp, aspectRatio = 1f, onClick = onClick, modifier = Modifier.clip(RoundedCornerShape(18.dp)))
             if (favorite) {
                 Icon(
                     Icons.Rounded.Favorite,

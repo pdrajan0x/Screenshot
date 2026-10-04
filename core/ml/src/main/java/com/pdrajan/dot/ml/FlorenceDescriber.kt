@@ -45,7 +45,11 @@ class FlorenceDescriber private constructor(
         FlorenceModel(env, session("vision_encoder.onnx"), session("embed_tokens.onnx"), session("encoder_model.onnx"), session("decoder_model.onnx"), config)
     }.also { model = it }
 
-    /** Blocking; call from a background thread. [screenText] is what OCR read, to check quotes against. */
+    /**
+     * Blocking; call from a background thread. [screenText] is what OCR read, to check quotes
+     * against. Synchronized with [close], so the model is never released mid-answer.
+     */
+    @Synchronized
     fun describe(bitmap: Bitmap, screenText: String): ImageDescription {
         val m = model()
         val image = m.encodeImage(pixels(bitmap))

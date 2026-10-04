@@ -189,7 +189,7 @@ def wait_until_read(max_minutes=40):
 
     open_settings()
     # The README shows descriptions and keywords, which are hidden by default.
-    if tap("Show descriptions and keywords", exact=True, required=False):
+    if tap("Show description and keywords", exact=True, required=False):
         wait(1)
     started = time.time()
     deadline = started + max_minutes * 60
@@ -214,6 +214,7 @@ def wait_until_read(max_minutes=40):
             t for t in texts
             if " left" in t or "waiting" in t or "Reading your screenshots" in t
             or "the description model ·" in t or "Checking the description model" in t or "Description model ·" in t
+            or "Getting the text reader" in t
         ]
         print("status:", busy[0] if busy else "idle", flush=True)
         if busy:

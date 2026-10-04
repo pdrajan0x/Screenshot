@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +64,10 @@ fun MediaThumbnail(
     onLongClick: (() -> Unit)? = null,
     /** Not processed by the AI yet: a tiny red dot in the corner (it goes away once done). */
     pending: Boolean = false,
+    /** Fixed memory-cache key, so another screen can show this thumbnail while it loads more. */
+    memoryCacheKey: String? = null,
+    /** The same picture on another screen (see [sharedImage]). */
+    sharedKey: Any? = null,
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val scale by animateFloatAsState(if (selected) 0.86f else 1f, label = "select-scale")
@@ -76,6 +81,7 @@ fun MediaThumbnail(
         Box(
             Modifier
                 .fillMaxSize()
+                .let { if (sharedKey != null) it.sharedImage(sharedKey, enabled = !selectionMode) else it }
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale
@@ -84,7 +90,9 @@ fun MediaThumbnail(
                 .background(DotTheme.extra.thumbnailPlaceholder),
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(context).data(model).size(sizePx).crossfade(true).build(),
+                model = remember(model, sizePx, memoryCacheKey) {
+                    ImageRequest.Builder(context).data(model).size(sizePx).crossfade(150).memoryCacheKey(memoryCacheKey).build()
+                },
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

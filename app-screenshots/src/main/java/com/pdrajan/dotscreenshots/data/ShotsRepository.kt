@@ -18,7 +18,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -31,8 +33,12 @@ class ShotsRepository(private val database: ShotsDatabase) {
 
     private fun changed() = changes.update { it + 1 }
 
+    /**
+     * Re-runs [block] when the data changes, at most every [OBSERVE_GAP_MS] while screenshots are
+     * being processed (each one is a change), so screens aren't rebuilt several times a second.
+     */
     private fun <T> observe(block: () -> T): Flow<T> =
-        changes.map { block() }.flowOn(Dispatchers.IO).conflate().distinctUntilChanged()
+        changes.transform { emit(it); delay(OBSERVE_GAP_MS) }.map { block() }.flowOn(Dispatchers.IO).conflate().distinctUntilChanged()
 
     // ---------------------------------------------------------------- reads
 
@@ -182,10 +188,12 @@ class ShotsRepository(private val database: ShotsDatabase) {
         }.associateBy { it.id }
     }
 
-    suspend fun textsByIds(ids: List<Long>): Map<Long, String> = withContext(Dispatchers.IO) {
+    /** The words of each screenshot, for search snippets; the description only when it may be shown. */
+    suspend fun textsByIds(ids: List<Long>, withDescription: Boolean): Map<Long, String> = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext emptyMap()
+        val description = if (withDescription) "COALESCE(description, '') || ' ' || " else ""
         ids.chunked(500).flatMap { chunk ->
-            db.rawQuery("SELECT id, COALESCE(description, '') || ' ' || COALESCE(ocr_text, '') || ' ' || COALESCE(note, '') FROM shots WHERE id IN (${chunk.joinToString(",")})", null).use { c ->
+            db.rawQuery("SELECT id, $description COALESCE(ocr_text, '') || ' ' || COALESCE(note, '') FROM shots WHERE id IN (${chunk.joinToString(",")})", null).use { c ->
                 buildList { while (c.moveToNext()) add(c.getLong(0) to c.getString(1)) }
             }
         }.toMap()
@@ -505,9 +513,8 @@ class ShotsRepository(private val database: ShotsDatabase) {
     companion object {
         private const val SHOT_COLUMNS = "id, uri, name, taken_at, width, height, size, state, app, categories, favorite"
         private const val SHOT_COLUMN_COUNT = 11
+        private const val OBSERVE_GAP_MS = 300L
 
-        /** Rows whose source app isn't certain (not from usage history, the file name or the user). */
-        private const val UNCERTAIN_APP = "(app_source IS NULL OR app_source NOT IN ('usage', 'file', 'user'))"
 
         fun encodeEntities(entities: List<Entity>): String = JSONArray().apply {
             entities.forEach { e ->

@@ -69,7 +69,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -126,7 +125,16 @@ import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.pdrajan.dot.design.Emphasized
+import com.pdrajan.dot.design.EmphasizedAccelerate
+import com.pdrajan.dot.design.EmphasizedDecelerate
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import com.pdrajan.dot.design.MediaThumbs
+import androidx.compose.animation.core.tween
 import com.pdrajan.dot.design.glass
+import com.pdrajan.dot.design.sharedImage
+import coil3.request.ImageRequest
 import com.pdrajan.dot.design.glassSource
 import com.pdrajan.dot.design.rememberGlass
 import com.pdrajan.dot.media.FileDetails
@@ -144,8 +152,11 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
 
     private fun idsOf(flow: Flow<List<Shot>>) = flow.map { list -> list.map { it.id } }
 
-    /** Null until loaded, so the pager can start on the right page. */
-    val ids: StateFlow<List<Long>?> = when {
+    /**
+     * The screenshots to swipe through. Known from the first frame (the grid's order, or the
+     * search results), so the picture can grow out of its thumbnail right away.
+     */
+    val ids: StateFlow<List<Long>> = when {
         ctx == ShotContext.ALL -> idsOf(c.repo.observeShots())
         ctx == ShotContext.FAVORITES -> idsOf(c.repo.observeFavorites())
         ctx == ShotContext.SEARCH -> flowOf(c.lastSearchIds)
@@ -153,7 +164,11 @@ class DetailViewModel(private val c: AppContainer, private val initialId: Long, 
         ctx.startsWith("col:") -> idsOf(c.repo.observeCollectionShots(ctx.removePrefix("col:").toLongOrNull() ?: -1))
         else -> flowOf(listOf(initialId))
     }.map { list -> if (initialId in list || list.isEmpty()) list.ifEmpty { listOf(initialId) } else list }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            (if (ctx == ShotContext.SEARCH) c.lastSearchIds else c.viewerOrder).takeIf { initialId in it } ?: listOf(initialId),
+        )
 
     val current = MutableStateFlow(initialId)
     val detail: StateFlow<ShotDetail?> =
@@ -215,8 +230,8 @@ fun DetailScreen(
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         val list = ids
-        if (list != null && list.isNotEmpty()) {
-            key(list.isNotEmpty()) {
+        if (list.isNotEmpty()) {
+            run {
                 val pager = rememberPagerState(initialPage = list.indexOf(initialId).coerceAtLeast(0)) { list.size }
                 LaunchedEffect(pager.currentPage, list) {
                     list.getOrNull(pager.currentPage)?.let(vm::select)
@@ -246,7 +261,13 @@ fun DetailScreen(
             }
         }
 
-        AnimatedVisibility(visible = chrome, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter)) {
+        // The bars glide a little as they fade, the way Photos does when you tap the picture.
+        AnimatedVisibility(
+            visible = chrome,
+            enter = fadeIn(tween(220)) + slideInVertically(tween(260, easing = EmphasizedDecelerate)) { -it / 3 },
+            exit = fadeOut(tween(160)) + slideOutVertically(tween(200, easing = EmphasizedAccelerate)) { -it / 3 },
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -281,7 +302,12 @@ fun DetailScreen(
             }
         }
 
-        AnimatedVisibility(visible = chrome && !detailsShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
+        AnimatedVisibility(
+            visible = chrome && !detailsShown,
+            enter = fadeIn(tween(220)) + slideInVertically(tween(260, easing = EmphasizedDecelerate)) { it / 3 },
+            exit = fadeOut(tween(160)) + slideOutVertically(tween(200, easing = EmphasizedAccelerate)) { it / 3 },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -324,7 +350,7 @@ fun DetailScreen(
                         deleter.delete(listOf(shot.uri)) { ok ->
                             if (ok) {
                                 vm.forget(shot.id)
-                                if ((ids?.size ?: 0) <= 1) onBack()
+                                if (ids.size <= 1) onBack()
                             }
                         }
                     }
@@ -361,7 +387,7 @@ private fun ShotPage(
         // Buttons: bring the details up to just below the middle of the screen, or go back to the picture.
         LaunchedEffect(request) {
             val r = request ?: return@LaunchedEffect
-            if (r.id == id) scroll.animateScrollTo(if (r.open) (viewportPx * 0.55f).toInt() else 0)
+            if (r.id == id) scroll.animateScrollTo(if (r.open) (viewportPx * 0.55f).toInt() else 0, tween(450, easing = Emphasized))
         }
         if (isCurrent) {
             LaunchedEffect(scroll, viewportPx) {
@@ -369,9 +395,14 @@ private fun ShotPage(
             }
         }
         Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
-            Box(Modifier.fillMaxWidth().height(viewport)) {
+            // The current page's picture flies from and back into its grid thumbnail.
+            Box(Modifier.fillMaxWidth().height(viewport).sharedImage(shotKey(id), enabled = isCurrent)) {
+                val context = LocalContext.current
                 ZoomableAsyncImage(
-                    model = shotUri(id),
+                    // The grid's thumbnail shows at once while the full picture loads.
+                    model = remember(id) {
+                        ImageRequest.Builder(context).data(shotUri(id)).placeholderMemoryCacheKey(MediaThumbs.cacheKey(id)).build()
+                    },
                     contentDescription = "Screenshot",
                     modifier = Modifier.fillMaxSize(),
                     onClick = { onToggleChrome() },
@@ -613,7 +644,7 @@ private fun FileDetailsList(d: ShotDetail) {
             Icons.AutoMirrored.Rounded.ManageSearch,
             "Search",
             when (shot.state) {
-                IndexState.INDEXED -> if (d.text.isBlank()) "Searchable by its description" else "Searchable · ${d.text.split(Regex("\\s+")).count { it.isNotBlank() }} words read"
+                IndexState.INDEXED -> if (d.text.isBlank()) "Searchable" else "Searchable · ${d.text.split(Regex("\\s+")).count { it.isNotBlank() }} words read"
                 IndexState.PENDING -> "Waiting to be read"
                 IndexState.FAILED -> "Couldn't be read"
             },

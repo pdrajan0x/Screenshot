@@ -57,6 +57,7 @@ class ModelDownload(private val context: Context) {
     val ready: Boolean get() = installedDir() != null
 
     /** Starts (or restarts) downloading whatever is missing. [mobileData]: also over mobile data. */
+    @Synchronized
     fun start(mobileData: Boolean) {
         if (ready) return
         dir.mkdirs()

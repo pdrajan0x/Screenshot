@@ -1,14 +1,16 @@
 package com.pdrajan.dotscreenshots.ui
 
 import android.net.Uri
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
@@ -17,11 +19,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation.NamedNavArgument
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.pdrajan.dot.design.EmphasizedAccelerate
+import com.pdrajan.dot.design.EmphasizedDecelerate
+import com.pdrajan.dot.design.LocalNavAnimatedScope
+import com.pdrajan.dot.design.LocalSharedTransitionScope
 import com.pdrajan.dotscreenshots.AppContainer
 import com.pdrajan.dotscreenshots.DotScreenshotsApp
 
@@ -43,8 +52,31 @@ inline fun <reified VM : ViewModel> containerViewModel(key: String? = null, cros
     return viewModel(key = key, factory = viewModelFactory { initializer { create(container) } })
 }
 
+/** The app's screens, with pictures flying between them (see [sharedImage]). */
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun DotScreenshotsNavHost(container: AppContainer) {
+    SharedTransitionLayout {
+        CompositionLocalProvider(LocalSharedTransitionScope provides this) { NavGraph(container) }
+    }
+}
+
+private fun NavBackStackEntry.isViewer() = destination.route?.startsWith("detail") == true
+
+/** Opened over the screen it came from, without sliding: the viewer and search. */
+private fun NavBackStackEntry.fadesIn() = isViewer() || destination.route?.startsWith("search") == true
+
+/** A destination whose content can join shared transitions. */
+private fun NavGraphBuilder.screen(
+    route: String,
+    arguments: List<NamedNavArgument> = emptyList(),
+    content: @Composable (NavBackStackEntry) -> Unit,
+) = composable(route, arguments) { entry ->
+    CompositionLocalProvider(LocalNavAnimatedScope provides this) { content(entry) }
+}
+
+@Composable
+private fun NavGraph(container: AppContainer) {
     val nav = rememberNavController()
     val onboarded by container.settings.onboardingDone.collectAsStateWithLifecycle()
 
@@ -53,18 +85,31 @@ fun DotScreenshotsNavHost(container: AppContainer) {
     NavHost(
         navController = nav,
         startDestination = if (onboarded) "home" else "onboarding",
-        // Short and eased: the new screen fades and grows in slightly over the old one, and back.
-        enterTransition = { fadeIn(tween(220, easing = LinearOutSlowInEasing)) + scaleIn(tween(260, easing = FastOutSlowInEasing), initialScale = 0.96f) },
-        exitTransition = { fadeOut(tween(160, easing = FastOutLinearInEasing)) },
-        popEnterTransition = { fadeIn(tween(220, easing = LinearOutSlowInEasing)) },
-        popExitTransition = { fadeOut(tween(160, easing = FastOutLinearInEasing)) + scaleOut(tween(200, easing = FastOutSlowInEasing), targetScale = 0.96f) },
+        // The viewer and search fade in over the screen they came from (the picture itself flies
+        // out of its thumbnail); other screens slide in a little from the side, like Android's own.
+        enterTransition = {
+            if (targetState.fadesIn()) fadeIn(tween(300, easing = LinearOutSlowInEasing))
+            else slideInHorizontally(tween(400, easing = EmphasizedDecelerate)) { it / 8 } + fadeIn(tween(250, 50, LinearOutSlowInEasing))
+        },
+        exitTransition = {
+            if (targetState.fadesIn()) fadeOut(tween(200, 150, FastOutLinearInEasing))
+            else slideOutHorizontally(tween(400, easing = EmphasizedDecelerate)) { -it / 8 } + fadeOut(tween(200, easing = FastOutLinearInEasing))
+        },
+        popEnterTransition = {
+            if (initialState.fadesIn()) fadeIn(tween(200, easing = LinearOutSlowInEasing))
+            else slideInHorizontally(tween(400, easing = EmphasizedDecelerate)) { -it / 8 } + fadeIn(tween(250, 50, LinearOutSlowInEasing))
+        },
+        popExitTransition = {
+            if (initialState.fadesIn()) fadeOut(tween(300, easing = FastOutLinearInEasing))
+            else slideOutHorizontally(tween(350, easing = EmphasizedAccelerate)) { it / 8 } + fadeOut(tween(200, easing = FastOutLinearInEasing))
+        },
     ) {
-        composable("onboarding") {
+        screen("onboarding") {
             OnboardingScreen(onDone = {
                 nav.navigate("home") { popUpTo("onboarding") { inclusive = true } }
             })
         }
-        composable("home") {
+        screen("home") {
             HomeScreen(
                 onOpenShot = { id -> openDetail(id, ShotContext.ALL) },
                 onSearch = { nav.navigate("search") },
@@ -74,7 +119,7 @@ fun DotScreenshotsNavHost(container: AppContainer) {
                 onSettings = { nav.navigate("settings") },
             )
         }
-        composable(
+        screen(
             "search?q={q}",
             arguments = listOf(navArgument("q") { type = NavType.StringType; defaultValue = "" }),
         ) { entry ->
@@ -84,14 +129,14 @@ fun DotScreenshotsNavHost(container: AppContainer) {
                 initialQuery = entry.arguments?.getString("q").orEmpty(),
             )
         }
-        composable(
+        screen(
             "detail/{id}?ctx={ctx}",
             arguments = listOf(
                 navArgument("id") { type = NavType.LongType },
                 navArgument("ctx") { type = NavType.StringType; defaultValue = ShotContext.ALL },
             ),
         ) { entry ->
-            val id = entry.arguments?.getLong("id") ?: return@composable
+            val id = entry.arguments?.getLong("id") ?: return@screen
             val ctx = entry.arguments?.getString("ctx") ?: ShotContext.ALL
             DetailScreen(
                 initialId = id,
@@ -102,21 +147,21 @@ fun DotScreenshotsNavHost(container: AppContainer) {
                 onEdit = { nav.navigate("edit/$it") },
             )
         }
-        composable("edit/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { entry ->
-            EditScreen(id = entry.arguments?.getLong("id") ?: return@composable, onBack = { nav.popBackStack() })
+        screen("edit/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { entry ->
+            EditScreen(id = entry.arguments?.getLong("id") ?: return@screen, onBack = { nav.popBackStack() })
         }
-        composable(
+        screen(
             "list/{ctx}",
             arguments = listOf(navArgument("ctx") { type = NavType.StringType }),
         ) { entry ->
-            val ctx = entry.arguments?.getString("ctx") ?: return@composable
+            val ctx = entry.arguments?.getString("ctx") ?: return@screen
             ShotListScreen(
                 context = ctx,
                 onBack = { nav.popBackStack() },
                 onOpenShot = { id -> openDetail(id, ctx) },
             )
         }
-        composable("settings") {
+        screen("settings") {
             SettingsScreen(onBack = { nav.popBackStack() })
         }
     }

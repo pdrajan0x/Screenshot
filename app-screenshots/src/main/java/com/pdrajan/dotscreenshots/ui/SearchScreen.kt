@@ -166,7 +166,8 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
     ) {
         val all = best + more
         val shots = c.repo.shotsByIds(all.map { it.first })
-        val texts = c.repo.textsByIds(all.filter { MatchReason.TEXT in it.second }.map { it.first })
+        // Snippets never quote the description unless Settings shows descriptions.
+        val texts = c.repo.textsByIds(all.filter { MatchReason.TEXT in it.second }.map { it.first }, withDescription = c.settings.showDescriptions.value)
         val terms = FtsQuery.terms(DateQueryParser().parse(q).rest)
         fun hits(list: List<Pair<Long, Set<MatchReason>>>) = list.mapNotNull { (id, reasons) ->
             val shot = shots[id]?.takeIf(keep) ?: return@mapNotNull null
