@@ -340,6 +340,8 @@ fun DotProgressStrip(
     modifier: Modifier = Modifier,
     progress: Float? = null,
     action: (@Composable () -> Unit)? = null,
+    /** False for a note or an error: no moving dots, which would say work is going on. */
+    working: Boolean = true,
 ) {
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -348,8 +350,10 @@ fun DotProgressStrip(
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                DotLoader()
-                Spacer(Modifier.width(12.dp))
+                if (working) {
+                    DotLoader()
+                    Spacer(Modifier.width(12.dp))
+                }
                 Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                 action?.invoke()
             }

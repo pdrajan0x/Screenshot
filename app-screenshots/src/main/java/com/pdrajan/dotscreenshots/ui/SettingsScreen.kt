@@ -357,6 +357,7 @@ private fun StatusStrip(c: AppContainer, onDetails: () -> Unit) {
             is Status.Error -> DotProgressStrip(
                 text = s.message,
                 modifier = modifier,
+                working = false,
                 action = { TextButton(onClick = onDetails) { Text("Details", color = DotTheme.extra.accent) } },
             )
             is Status.Waiting -> DotProgressStrip(
@@ -368,6 +369,7 @@ private fun StatusStrip(c: AppContainer, onDetails: () -> Unit) {
                 text = "Google Play services couldn't get the text reader: ${s.count} screenshots are searchable by their " +
                     "description only. They're read again when it's available.",
                 modifier = modifier,
+                working = false,
             )
             Status.Idle -> Spacer(Modifier.height(0.dp))
         }
