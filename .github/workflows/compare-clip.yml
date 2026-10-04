@@ -5,12 +5,13 @@ on:
     paths:
       - tools/model/compare_clip.py
       - tools/model/eval/photos.json
+      - tools/model/eval/screens/**
       - .github/workflows/compare-clip.yml
   workflow_dispatch:
 
 jobs:
   compare:
-    name: MobileCLIP2 S0 vs S2 vs B on picture keywords
+    name: MobileCLIP2 sizes on picture keywords
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
