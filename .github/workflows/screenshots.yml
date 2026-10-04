@@ -55,7 +55,7 @@ jobs:
           disk-size: 6000M
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
-          script: python3 tools/screenshots/take.py docs/screenshots DotScreenshots.apk
+          script: python3 -u tools/screenshots/take.py docs/screenshots DotScreenshots.apk
 
       - uses: actions/upload-artifact@v4
         if: always()

@@ -144,12 +144,43 @@ def fill_library():
     wait(2)
 
 
+def in_front():
+    out = sh("dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity'")
+    return PKG in out
+
+
+def launch():
+    sh(f"am start -W -n {PKG}/.MainActivity")
+    wait(5)
+
+
+def report_logs(label):
+    """The app's crash and its own log lines, into the job log (artifacts can't be read back)."""
+    print(f"--- {label}: crash buffer", flush=True)
+    print(adb("logcat", "-d", "-b", "crash")[-8000:], flush=True)
+    print(f"--- {label}: app log", flush=True)
+    lines = adb("logcat", "-d", "-s", "Dot:*", "AndroidRuntime:*", "DEBUG:*", "libc:*", "lowmemorykiller:*").splitlines()
+    print("\n".join(lines[-120:]), flush=True)
+
+
 def wait_until_read(max_minutes=40):
     """Settings shows "N of N screenshots searchable" and no "… left" once everything is read and described."""
-    tap("Settings", exact=True)
-    wait(2)
+    def open_settings():
+        if not in_front():
+            launch()
+        tap("Settings", exact=True)
+        wait(2)
+
+    open_settings()
     deadline = time.time() + max_minutes * 60
+    reports = 0
     while time.time() < deadline:
+        if not in_front():
+            print("!! the app isn't in front", flush=True)
+            if reports < 3:
+                report_logs("app not in front")
+                reports += 1
+            open_settings()
         texts = [n.get("text") or "" for n in ui_nodes()]
         busy = [t for t in texts if " left" in t or "waiting" in t]
         for t in texts:
@@ -171,20 +202,25 @@ def main():
     demo_status_bar()
     fill_library()
 
+    print("library filled; installing", flush=True)
     adb("install", "-r", APK, check=True, timeout=600)
     for perm in ["READ_MEDIA_IMAGES", "ACCESS_MEDIA_LOCATION", "POST_NOTIFICATIONS"]:
         sh(f"pm grant {PKG} android.permission.{perm}")
-    sh(f"monkey -p {PKG} -c android.intent.category.LAUNCHER 1")
-    wait(15)
+    adb("logcat", "-c")
+    launch()
+    wait(10)
     tap("Get started", required=False)
     wait(5)
+    print("launched; app in front:", in_front(), flush=True)
 
-    wait_until_read()
+    ok = wait_until_read()
+    report_logs("after processing")
     save("settings")
     sh("input keyevent 4")
     wait(3)
 
     w, h = size()
+    ok = ok and in_front()
     save("home")
 
     # The viewer: the newest screenshot, then its details.
@@ -230,6 +266,10 @@ def main():
     sh("input keyevent 66")
     wait(6)
     save("search")
+    if not ok:
+        # Don't let the workflow commit screenshots of a half-processed or missing app.
+        print("!! screenshots are not good enough to commit", flush=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
