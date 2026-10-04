@@ -1,7 +1,7 @@
 name: README screenshots
 
-# Run by hand after a release: installs the Latest APK on an emulator, captures the app's main
-# screens (tools/screenshots/take.py) and commits them to docs/screenshots for the README.
+# Run by hand: builds the app for an x86_64 emulator, captures its main screens with a few sample
+# screenshots (tools/screenshots/take.py) and commits them to docs/screenshots for the README.
 on:
   workflow_dispatch:
 
@@ -15,10 +15,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download the Latest APK
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release download latest --pattern DotScreenshots.apk
+      # The models, as exported by the Build workflow (same cache key).
+      - name: Restore exported models
+        uses: actions/cache/restore@v4
+        with:
+          path: model-out
+          key: models-${{ hashFiles('tools/model/export_mobileclip.py', 'tools/model/fetch_florence.py', 'tools/model/requirements.txt') }}
+          fail-on-cache-miss: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      # The same app built for x86_64: the emulator runs it natively (the ARM build would be translated, far too slowly).
+      - name: Build for the emulator
+        run: |
+          ./gradlew :app-screenshots:assembleRelease -Pdot.abi=x86_64 --console=plain
+          cp app-screenshots/build/outputs/apk/release/*.apk DotScreenshots.apk
 
       - name: Enable KVM
         run: |

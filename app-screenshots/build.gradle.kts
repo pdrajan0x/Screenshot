@@ -17,7 +17,8 @@ android {
         versionName = "0.1.$runNumber"
         ndk {
             // Every phone this targets is 64-bit ARM; skipping other ABIs keeps ONNX Runtime small.
-            abiFilters += "arm64-v8a"
+            // (-Pdot.abi=x86_64 builds for the emulator that takes the README screenshots.)
+            abiFilters += (project.findProperty("dot.abi") as String?) ?: "arm64-v8a"
         }
     }
 

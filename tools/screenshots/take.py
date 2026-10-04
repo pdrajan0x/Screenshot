@@ -120,14 +120,22 @@ def fill_library():
         # Skip Chrome's first-run screens.
         sh("echo 'chrome --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line")
         sh("am set-debug-app --persistent com.android.chrome")
+        w, h = size()
+        # The last one taken is the newest: the viewer shots open it.
         for url in [
-            "https://en.m.wikipedia.org/wiki/Golden_Retriever",
-            "https://en.m.wikipedia.org/wiki/Pizza",
-            "https://en.m.wikipedia.org/wiki/Taj_Mahal",
             "https://en.m.wikipedia.org/wiki/Indian_Railways",
+            "https://en.m.wikipedia.org/wiki/Taj_Mahal",
+            "https://en.m.wikipedia.org/wiki/Pizza",
+            "https://en.m.wikipedia.org/wiki/Golden_Retriever",
         ]:
             sh(f"am start -W -a android.intent.action.VIEW -d {url} com.android.chrome")
             wait(10)
+            # Chrome's notification prompt covers the page.
+            if tap("No thanks", exact=True, required=False):
+                wait(2)
+            # Scroll a little, to the article's picture.
+            sh(f"input swipe {w // 2} {int(h * 0.7)} {w // 2} {int(h * 0.45)} 400")
+            wait(3)
             system_screenshot()
         sh("am force-stop com.android.chrome")
     else:
@@ -191,6 +199,9 @@ def main():
     sh(f"input swipe {w // 2} {int(h * 0.8)} {w // 2} {int(h * 0.25)} 400")
     wait(3)
     save("details")
+    # Further down: the keywords, opened.
+    sh(f"input swipe {w // 2} {int(h * 0.75)} {w // 2} {int(h * 0.45)} 400")
+    wait(2)
     tap("Show keywords", required=False)
     wait(2)
     save("details-keywords")
