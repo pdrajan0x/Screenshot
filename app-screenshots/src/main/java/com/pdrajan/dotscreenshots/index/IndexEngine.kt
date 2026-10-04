@@ -225,7 +225,9 @@ class IndexEngine(
         batchLock.withLock {
             val jobs = repo.describeQueue(limit, since)
             if (jobs.isEmpty()) return 0
-            val florence = hub.florence() ?: return 0
+            val florence = runCatching { hub.florence() }
+                .onFailure { DotLog.e("describe: couldn't load the description model", it) }
+                .getOrNull() ?: return 0
             _progress.value = IndexProgress(running = true, total = jobs.size)
             var done = 0
             val started = System.currentTimeMillis()
@@ -246,8 +248,14 @@ class IndexEngine(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
+                        if (e is OutOfMemoryError || e.javaClass.name.startsWith("ai.onnxruntime")) {
+                            // The model itself failed (memory, a session that wouldn't load): try again later.
+                            DotLog.e("describe: the description model failed; trying again later", e)
+                            _lastError.value = errorText(e)
+                            break
+                        }
                         DotLog.w("describe: couldn't describe ${job.uri}: ${e.javaClass.simpleName}: ${e.message}")
-                        // Don't retry forever; it stays findable by its text and keywords.
+                        // This picture can't be read: don't retry forever; it stays findable by its text and keywords.
                         repo.saveDescription(job.id, null, emptyList())
                     }
                     done++
