@@ -258,6 +258,7 @@ fun ShotListScreen(context: String, onBack: () -> Unit, onOpenShot: (Long) -> Un
                     shot = shot,
                     selected = shot.id in selection,
                     selectionMode = selectionMode,
+                    columns = columns,
                     onClick = {
                         if (selectionMode) vm.toggle(shot.id)
                         else {

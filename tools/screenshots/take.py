@@ -213,7 +213,8 @@ def wait_until_read(max_minutes=40):
         busy = [
             t for t in texts
             if " left" in t or "waiting" in t or "Reading your screenshots" in t
-            or "the description model ·" in t or "Checking the description model" in t or "Description model ·" in t
+            or t.startswith("Downloading the description model") or t.startswith("Checking the description model")
+            or ("Description model:" in t and ("waiting" in t or "retrying" in t))
             or "Getting the text reader" in t
         ]
         print("status:", busy[0] if busy else "idle", flush=True)

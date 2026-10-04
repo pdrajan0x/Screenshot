@@ -1,7 +1,11 @@
 package com.pdrajan.dotscreenshots.ui
 
 import android.net.Uri
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -27,6 +31,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.pdrajan.dot.design.Emphasized
 import com.pdrajan.dot.design.EmphasizedAccelerate
 import com.pdrajan.dot.design.EmphasizedDecelerate
 import com.pdrajan.dot.design.LocalNavAnimatedScope
@@ -66,6 +71,18 @@ private fun NavBackStackEntry.isViewer() = destination.route?.startsWith("detail
 /** Opened over the screen it came from, without sliding: the viewer and search. */
 private fun NavBackStackEntry.fadesIn() = isViewer() || destination.route?.startsWith("search") == true
 
+/** Back to the screen underneath: it fades back in (search, the viewer) or slides back. */
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.popEnter(): EnterTransition =
+    if (initialState.fadesIn()) fadeIn(tween(220, easing = LinearOutSlowInEasing))
+    else slideInHorizontally(tween(400, easing = EmphasizedDecelerate)) { -it / 8 } + fadeIn(tween(250, 50, LinearOutSlowInEasing))
+
+/** Closing: the viewer fades away while settling back a little, other screens slide off. */
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.popExit(): ExitTransition = when {
+    initialState.isViewer() -> fadeOut(tween(240, easing = FastOutLinearInEasing)) + scaleOut(tween(280, easing = Emphasized), targetScale = 0.94f)
+    initialState.fadesIn() -> fadeOut(tween(220, easing = FastOutLinearInEasing))
+    else -> slideOutHorizontally(tween(350, easing = EmphasizedAccelerate)) { it / 8 } + fadeOut(tween(200, easing = FastOutLinearInEasing))
+}
+
 /** A destination whose content can join shared transitions. */
 private fun NavGraphBuilder.screen(
     route: String,
@@ -95,14 +112,12 @@ private fun NavGraph(container: AppContainer) {
             if (targetState.fadesIn()) fadeOut(tween(200, 150, FastOutLinearInEasing))
             else slideOutHorizontally(tween(400, easing = EmphasizedDecelerate)) { -it / 8 } + fadeOut(tween(200, easing = FastOutLinearInEasing))
         },
-        popEnterTransition = {
-            if (initialState.fadesIn()) fadeIn(tween(200, easing = LinearOutSlowInEasing))
-            else slideInHorizontally(tween(400, easing = EmphasizedDecelerate)) { -it / 8 } + fadeIn(tween(250, 50, LinearOutSlowInEasing))
-        },
-        popExitTransition = {
-            if (initialState.fadesIn()) fadeOut(tween(300, easing = FastOutLinearInEasing))
-            else slideOutHorizontally(tween(350, easing = EmphasizedAccelerate)) { it / 8 } + fadeOut(tween(200, easing = FastOutLinearInEasing))
-        },
+        popEnterTransition = { popEnter() },
+        popExitTransition = { popExit() },
+        // The back gesture plays the same closing animation, following the finger (the library's
+        // own shrinks the screen into a small card).
+        predictivePopEnterTransition = { popEnter() },
+        predictivePopExitTransition = { popExit() },
     ) {
         screen("onboarding") {
             OnboardingScreen(onDone = {

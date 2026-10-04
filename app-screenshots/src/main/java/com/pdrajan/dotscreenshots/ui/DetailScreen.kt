@@ -133,7 +133,9 @@ import androidx.compose.animation.slideOutVertically
 import com.pdrajan.dot.design.MediaThumbs
 import androidx.compose.animation.core.tween
 import com.pdrajan.dot.design.glass
+import com.pdrajan.dot.design.LocalNavAnimatedScope
 import com.pdrajan.dot.design.screenSettled
+import androidx.compose.animation.EnterExitState
 import com.pdrajan.dot.design.sharedImage
 import coil3.request.ImageRequest
 import com.pdrajan.dot.design.glassSource
@@ -233,6 +235,8 @@ fun DetailScreen(
     // neighbouring pictures wait until it has landed. Once built they stay (tearing them down
     // would cost the closing animation its first frames); only the bars leave as it closes.
     val settled = screenSettled()
+    // Closing (Back or the back gesture): the viewer just fades away; the picture doesn't fly back.
+    val leaving = LocalNavAnimatedScope.current?.transition?.targetState == EnterExitState.PostExit
     var landed by remember { mutableStateOf(false) }
     LaunchedEffect(settled) { if (settled) landed = true }
 
@@ -260,6 +264,7 @@ fun DetailScreen(
                         vm = vm,
                         isCurrent = page == pager.currentPage,
                         landed = landed,
+                        leaving = leaving,
                         request = pageRequest,
                         onToggleChrome = { chrome = !chrome },
                         onDetailsShown = { detailsShown = it },
@@ -280,9 +285,13 @@ fun DetailScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .glass(glass, Color.Black, tintAlpha = if (detailsShown) 0.72f else 0.4f)
+                    .glass(
+                        glass, Color.Black, tintAlpha = if (detailsShown) 0.72f else 0.4f,
+                        mask = Brush.verticalGradient(0f to Color.Black, 0.72f to Color.Black, 1f to Color.Transparent),
+                    )
                     .statusBarsPadding()
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                    // Extra room below the title, where the glass fades out into the picture.
+                    .padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Color.White) }
@@ -320,10 +329,14 @@ fun DetailScreen(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .glass(glass, Color.Black, tintAlpha = 0.45f)
+                    .glass(
+                        glass, Color.Black, tintAlpha = 0.45f,
+                        mask = Brush.verticalGradient(0f to Color.Transparent, 0.22f to Color.Black, 1f to Color.Black),
+                    )
                     .navigationBarsPadding(),
             ) {
-                Spacer(Modifier.height(8.dp))
+                // Room above the buttons where the glass fades in from the picture.
+                Spacer(Modifier.height(20.dp))
                 val actions = detail?.entities?.flatMap { entityActions(it) }.orEmpty()
                 if (actions.isNotEmpty()) {
                     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -383,6 +396,7 @@ private fun ShotPage(
     vm: DetailViewModel,
     isCurrent: Boolean,
     landed: Boolean,
+    leaving: Boolean,
     request: PageRequest?,
     onToggleChrome: () -> Unit,
     onDetailsShown: (Boolean) -> Unit,
@@ -409,8 +423,8 @@ private fun ShotPage(
             }
         }
         Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
-            // The current page's picture flies from and back into its grid thumbnail.
-            Box(Modifier.fillMaxWidth().height(viewport).sharedImage(shotKey(id), enabled = isCurrent)) {
+            // Opening: the current page's picture grows out of its grid thumbnail.
+            Box(Modifier.fillMaxWidth().height(viewport).sharedImage(shotKey(id), enabled = isCurrent && !leaving)) {
                 val context = LocalContext.current
                 ZoomableAsyncImage(
                     // The grid's thumbnail shows at once while the full picture loads.

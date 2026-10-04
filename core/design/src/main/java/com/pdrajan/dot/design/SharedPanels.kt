@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -54,8 +56,10 @@ fun ProcessingSettings(policy: ProcessingPolicy, onChange: (ProcessingPolicy) ->
         },
         checked = policy.background,
         onCheckedChange = { onChange(policy.copy(background = it)) },
+        icon = Icons.Rounded.Sync,
     )
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+    // Lined up with the rows' text (after their icons).
+    Column(Modifier.padding(start = 60.dp, end = 20.dp, top = 8.dp, bottom = 12.dp)) {
         Text("Older items", style = MaterialTheme.typography.titleMedium)
         Text(
             "New ones are always done right away. Going through everything from before takes a lot of power.",

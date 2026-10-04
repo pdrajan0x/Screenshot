@@ -317,6 +317,7 @@ fun HomeScreen(
                         shot = shot,
                         selected = shot.id in selection,
                         selectionMode = selectionMode,
+                        columns = columns,
                         onClick = {
                             if (selectionMode) vm.toggle(shot.id)
                             else {

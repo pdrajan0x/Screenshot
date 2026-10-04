@@ -8,7 +8,9 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
+import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
+import okio.Path.Companion.toOkioPath
 import coil3.request.crossfade
 import com.pdrajan.dot.design.CrashLog
 import com.pdrajan.dot.design.MediaThumbs
@@ -62,6 +64,8 @@ class DotScreenshotsApp : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .memoryCache { MemoryCache.Builder().maxSizePercent(context, 0.25).build() }
+            // Sharp grid thumbnails are made once and kept here (see MediaThumbs).
+            .diskCache { DiskCache.Builder().directory(context.cacheDir.resolve("thumbnails").toOkioPath()).maxSizeBytes(300L * 1024 * 1024).build() }
             .components { MediaThumbs.addTo(this, context) }
             .crossfade(true)
             .build()
@@ -190,23 +194,10 @@ class AppContainer(val context: Context) {
         }
     }
 
-    /**
-     * Where the description model is: finished files are checked and moved into place (in case the
-     * app wasn't running when they finished), and with [start] a download that never began (or
-     * failed) starts.
-     */
+    /** Where the description model is; with [start], a download that never began (or failed) starts. */
     suspend fun checkModel(start: Boolean = false): ModelDownload.State = withContext(Dispatchers.IO) {
         val download = hub.download
         var state = runCatching { download.state() }.getOrElse { ModelDownload.State.Failed(it.message ?: "error") }
-        if (state is ModelDownload.State.Checking) {
-            _modelState.value = state
-            if (download.install()) {
-                onModelReady()
-                state = ModelDownload.State.Ready
-            } else {
-                state = runCatching { download.state() }.getOrElse { ModelDownload.State.Failed(it.message ?: "error") }
-            }
-        }
         // A failed download (no connection to Hugging Face, full storage) is tried again on the next app open.
         if (start && (state is ModelDownload.State.NotStarted || state is ModelDownload.State.Failed)) {
             download.start(mobileData = settings.modelOverMobile.value)

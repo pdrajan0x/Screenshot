@@ -1,6 +1,5 @@
 package com.pdrajan.dotscreenshots.ui
 
-import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
@@ -11,6 +10,21 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.SignalCellularAlt
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.StrokeCap
+import com.pdrajan.dot.design.SettingsDivider
+import com.pdrajan.dot.design.SettingsGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,13 +41,11 @@ import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,7 +72,6 @@ import com.pdrajan.dot.design.DotLargeTitle
 import com.pdrajan.dot.design.DotProgressStrip
 import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.ProcessingSettings
-import com.pdrajan.dot.design.SectionLabel
 import com.pdrajan.dot.design.SettingsRow
 import com.pdrajan.dot.design.SettingsSwitchRow
 import com.pdrajan.dot.design.ThemeMode
@@ -116,123 +127,136 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .navigationBarsPadding(),
         ) {
             DotLargeTitle("SETTINGS", Modifier.padding(horizontal = 20.dp))
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
             // Processing lives here, not on the home screen: what's left, why it waits, "Do it now".
             StatusStrip(c, onDetails = { diagnostics = true })
 
-            SectionLabel("Appearance", Modifier.padding(horizontal = 20.dp))
-            Row(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DotChip("System", onClick = { c.settings.setTheme(ThemeMode.SYSTEM) }, selected = theme == ThemeMode.SYSTEM)
-                DotChip("Light", onClick = { c.settings.setTheme(ThemeMode.LIGHT) }, selected = theme == ThemeMode.LIGHT)
-                DotChip("Dark", onClick = { c.settings.setTheme(ThemeMode.DARK) }, selected = theme == ThemeMode.DARK)
-            }
-            Spacer(Modifier.height(12.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            SectionLabel("Descriptions", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            ModelRow(c)
-            SettingsSwitchRow(
-                title = "Download over mobile data",
-                subtitle = "Otherwise the model (${c.hub.download.totalBytes / 1_000_000} MB, once) waits for Wi-Fi.",
-                checked = modelOverMobile,
-                onCheckedChange = {
-                    c.settings.setModelOverMobile(it)
-                    if (c.modelState.value !is ModelDownload.State.Ready) c.startModelDownload()
-                },
-            )
-            SettingsSwitchRow(
-                title = "Show description and keywords",
-                subtitle = "When a screenshot is open. Off: they're never shown anywhere, but search still uses them.",
-                checked = showDescriptions,
-                onCheckedChange = c.settings::setShowDescriptions,
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            SectionLabel("Search", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            SettingsSwitchRow(
-                title = "Read Hindi text",
-                subtitle = "Also reads Devanagari script. Applies to new screenshots; re-scan to update old ones.",
-                checked = hindi,
-                onCheckedChange = { c.settings.setReadHindi(it) },
-            )
-            SettingsRow(
-                title = "Re-scan all screenshots",
-                subtitle = "Reads every screenshot again. Notes and collections are kept.",
-                icon = Icons.Rounded.Refresh,
-                onClick = { confirmReindex = true },
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            SectionLabel("Processing", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            ProcessingSettings(
-                policy = processing,
-                onChange = {
-                    c.settings.setProcessing(it)
-                    if (it.background) c.scheduler.rescheduleBacklog() else c.scheduler.cancelBacklog()
-                },
-                appName = "Dot Screenshots",
-            )
-            // Exempt from battery optimisation, Android lets the background run keep going (see IndexWorker).
-            val power = remember { ctx.getSystemService(PowerManager::class.java) }
-            var unrestricted by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(ctx.packageName)) }
-            LifecycleResumeEffect(Unit) {
-                unrestricted = power.isIgnoringBatteryOptimizations(ctx.packageName)
-                onPauseOrDispose {}
-            }
-            val appDetails = { ctx.startSafely(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", ctx.packageName, null))) }
-            SettingsRow(
-                title = if (unrestricted) "Runs in the background" else "Let it run in the background",
-                subtitle = if (unrestricted) {
-                    "Android won't pause Dot Screenshots while it works. Some phones (Xiaomi, Realme, Vivo…) also need auto-start turned on."
-                } else {
-                    "Otherwise Android pauses the work soon after you leave. Some phones (Xiaomi, Realme, Vivo…) also need “No restrictions”."
-                },
-                icon = Icons.Rounded.BatterySaver,
-                onClick = {
-                    if (unrestricted) {
-                        appDetails()
-                    } else {
-                        @SuppressLint("BatteryLife")
-                        val ask = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.fromParts("package", ctx.packageName, null))
-                        if (runCatching { ctx.startActivity(ask) }.isFailure) appDetails()
-                    }
-                },
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            SectionLabel("Status", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            LibraryRow(c)
-            var oldModels by remember { mutableStateOf(OldModelFiles.found(ctx)) }
-            if (oldModels.isNotEmpty()) {
-                val mb = oldModels.sumOf { runCatching { it.length() }.getOrDefault(0L) } / 1_000_000
-                SettingsRow(
-                    title = "Delete the old AI model",
-                    subtitle = "Earlier versions downloaded it ($mb MB); Dot Screenshots no longer uses it. " +
-                        "Dot Gallery 0.1.29 or older may still use this copy.",
-                    icon = Icons.Rounded.DeleteSweep,
-                    onClick = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) { OldModelFiles.delete(ctx) }
-                            oldModels = OldModelFiles.found(ctx)
-                        }
+            SettingsGroup("Descriptions") {
+                ModelRow(c)
+                SettingsDivider()
+                SettingsSwitchRow(
+                    title = "Download over mobile data",
+                    subtitle = "Otherwise the model (${c.hub.download.totalBytes / 1_000_000} MB, once) waits for Wi-Fi.",
+                    checked = modelOverMobile,
+                    icon = Icons.Rounded.SignalCellularAlt,
+                    onCheckedChange = {
+                        c.settings.setModelOverMobile(it)
+                        if (c.modelState.value !is ModelDownload.State.Ready) c.startModelDownload()
                     },
                 )
+                SettingsDivider()
+                SettingsSwitchRow(
+                    title = "Show description and keywords",
+                    subtitle = "When a screenshot is open. Off: they're never shown anywhere, but search still uses them.",
+                    checked = showDescriptions,
+                    icon = Icons.Rounded.Visibility,
+                    onCheckedChange = c.settings::setShowDescriptions,
+                )
             }
-            SettingsRow(
-                title = "Diagnostics",
-                subtitle = "See what indexing did, copy the log or save it to Downloads.",
-                icon = Icons.Rounded.BugReport,
-                onClick = { diagnostics = true },
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            SectionLabel("About", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-            SettingsRow(
-                title = "Dot Screenshots ${BuildConfig.VERSION_NAME}",
-                subtitle = "All processing happens on this phone. No account; the internet is only used to download the description model once.",
-                icon = Icons.Rounded.Info,
-                onClick = { showLicenses = true },
-            )
+            SettingsGroup("Search") {
+                SettingsSwitchRow(
+                    title = "Read Hindi text",
+                    subtitle = "Also reads Devanagari script. Applies to new screenshots; re-scan to update old ones.",
+                    checked = hindi,
+                    icon = Icons.Rounded.Translate,
+                    onCheckedChange = { c.settings.setReadHindi(it) },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "Re-scan all screenshots",
+                    subtitle = "Reads every screenshot again. Notes and collections are kept.",
+                    icon = Icons.Rounded.Refresh,
+                    onClick = { confirmReindex = true },
+                )
+            }
+
+            SettingsGroup("Processing") {
+                ProcessingSettings(
+                    policy = processing,
+                    onChange = {
+                        c.settings.setProcessing(it)
+                        if (it.background) c.scheduler.rescheduleBacklog() else c.scheduler.cancelBacklog()
+                    },
+                    appName = "Dot Screenshots",
+                )
+                SettingsDivider()
+                // Exempt from battery optimisation, Android lets the background run keep going (see IndexWorker).
+                val power = remember { ctx.getSystemService(PowerManager::class.java) }
+                var unrestricted by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(ctx.packageName)) }
+                LifecycleResumeEffect(Unit) {
+                    unrestricted = power.isIgnoringBatteryOptimizations(ctx.packageName)
+                    onPauseOrDispose {}
+                }
+                SettingsRow(
+                    title = if (unrestricted) "Runs in the background" else "Let it run in the background",
+                    subtitle = if (unrestricted) {
+                        "Android won't pause Dot Screenshots while it works. Some phones (Xiaomi, Realme, Vivo…) also need auto-start turned on."
+                    } else {
+                        "In App info → Battery, choose “Unrestricted”; otherwise Android pauses the work soon after you leave."
+                    },
+                    icon = Icons.Rounded.BatterySaver,
+                    // App info → Battery → "Unrestricted" (asking for it directly needs a permission Play Protect frowns on).
+                    onClick = { ctx.startSafely(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", ctx.packageName, null))) },
+                )
+            }
+
+            SettingsGroup("Appearance") {
+                Row(Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Palette, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(16.dp))
+                    Text("Theme", style = MaterialTheme.typography.titleMedium)
+                }
+                Row(Modifier.padding(start = 60.dp, end = 20.dp, bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DotChip("System", onClick = { c.settings.setTheme(ThemeMode.SYSTEM) }, selected = theme == ThemeMode.SYSTEM)
+                    DotChip("Light", onClick = { c.settings.setTheme(ThemeMode.LIGHT) }, selected = theme == ThemeMode.LIGHT)
+                    DotChip("Dark", onClick = { c.settings.setTheme(ThemeMode.DARK) }, selected = theme == ThemeMode.DARK)
+                }
+            }
+
+            SettingsGroup("Library") {
+                LibraryRow(c)
+                var oldModels by remember { mutableStateOf(OldModelFiles.found(ctx)) }
+                if (oldModels.isNotEmpty()) {
+                    val mb = oldModels.sumOf { runCatching { it.length() }.getOrDefault(0L) } / 1_000_000
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "Delete the old AI model",
+                        subtitle = "Earlier versions downloaded it ($mb MB); Dot Screenshots no longer uses it. " +
+                            "Dot Gallery 0.1.29 or older may still use this copy.",
+                        icon = Icons.Rounded.DeleteSweep,
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { OldModelFiles.delete(ctx) }
+                                oldModels = OldModelFiles.found(ctx)
+                            }
+                        },
+                    )
+                }
+                SettingsDivider()
+                SettingsRow(
+                    title = "Diagnostics",
+                    subtitle = "See what indexing did, copy the log or save it to Downloads.",
+                    icon = Icons.Rounded.BugReport,
+                    onClick = { diagnostics = true },
+                )
+            }
+
+            SettingsGroup("About") {
+                SettingsRow(
+                    title = "Dot Screenshots ${BuildConfig.VERSION_NAME}",
+                    subtitle = "Open-source notices",
+                    icon = Icons.Rounded.Info,
+                    onClick = { showLicenses = true },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "Private by design",
+                    subtitle = "Everything is read and described on this phone. No account; the internet is only used once, to download the description model.",
+                    icon = Icons.Rounded.Lock,
+                    onClick = {},
+                )
+            }
             Spacer(Modifier.height(32.dp))
         }
     }
@@ -370,50 +394,78 @@ private fun LibraryRow(c: AppContainer) {
     )
 }
 
-/** The description model: downloading, waiting for Wi-Fi, ready, or a button to (re)start it. */
+/** The description model, as a row of its group: ready, downloading (with a bar), waiting, or a button to (re)start it. */
 @Composable
 private fun ModelRow(c: AppContainer) {
-    val current by c.modelState.collectAsStateWithLifecycle()
-    val onDownload = c::startModelDownload
-    val modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+    val state by c.modelState.collectAsStateWithLifecycle()
     fun mb(bytes: Long) = bytes / 1_000_000
-    // Only a change of kind (downloading → ready) animates; byte counts just update.
-    AnimatedContent(
-        targetState = current,
-        contentKey = { it::class },
-        transitionSpec = { fadeIn(tween(220, 60)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false) },
-        label = "model",
-    ) { state -> when (state) {
-        ModelDownload.State.Ready -> SettingsRow(
-            title = "Description model ready",
-            subtitle = "Florence-2-base, on this phone. Describes what's in each screenshot for search.",
-            icon = Icons.Rounded.CheckCircle,
-            onClick = {},
+    val title: String
+    val subtitle: String
+    var progress: Float? = null
+    var action: String? = null
+    when (val s = state) {
+        ModelDownload.State.Ready -> {
+            title = "Description model ready"
+            subtitle = "Florence-2-base, on this phone. Describes what's in each screenshot for search."
+        }
+        ModelDownload.State.Checking -> {
+            title = "Checking the description model"
+            subtitle = "Making sure the download is complete and intact…"
+        }
+        is ModelDownload.State.Downloading -> {
+            title = "Downloading the description model"
+            subtitle = if (s.bytes == 0L) "Connecting…" else "${mb(s.bytes)} of ${mb(s.total)} MB"
+            progress = if (s.total > 0) s.bytes.toFloat() / s.total else null
+        }
+        is ModelDownload.State.Waiting -> {
+            title = "Description model: ${s.reason}"
+            subtitle = "${mb(s.bytes)} of ${mb(s.total)} MB · it carries on by itself"
+            progress = if (s.total > 0) s.bytes.toFloat() / s.total else null
+        }
+        is ModelDownload.State.Failed -> {
+            title = "Description model: ${s.reason}"
+            subtitle = "Screenshots are still searchable by their text."
+            action = "Retry"
+        }
+        ModelDownload.State.NotStarted -> {
+            title = "Download the description model"
+            subtitle = "Describes what's in each screenshot for search. Until then, search uses the screen's text."
+            action = "Download"
+        }
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = action != null) { c.startModelDownload() }
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (state is ModelDownload.State.Ready) Icons.Rounded.CheckCircle else Icons.Rounded.AutoAwesome,
+            contentDescription = null,
+            tint = if (state is ModelDownload.State.Ready) DotTheme.extra.accent else MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        ModelDownload.State.Checking -> DotProgressStrip("Checking the description model…", modifier)
-        is ModelDownload.State.Downloading -> DotProgressStrip(
-            text = "Downloading the description model · ${mb(state.bytes)} of ${mb(state.total)} MB",
-            modifier = modifier,
-            progress = if (state.total > 0) state.bytes.toFloat() / state.total else null,
-        )
-        is ModelDownload.State.Waiting -> DotProgressStrip(
-            text = "Description model · ${state.reason} · ${mb(state.bytes)} of ${mb(state.total)} MB",
-            modifier = modifier,
-            progress = if (state.total > 0) state.bytes.toFloat() / state.total else null,
-        )
-        is ModelDownload.State.Failed -> SettingsRow(
-            title = "Description model: ${state.reason}",
-            subtitle = "Screenshots are still searchable by their text. Tap to try again.",
-            icon = Icons.Rounded.Download,
-            onClick = onDownload,
-            trailing = { TextButton(onClick = onDownload) { Text("Retry", color = DotTheme.extra.accent) } },
-        )
-        ModelDownload.State.NotStarted -> SettingsRow(
-            title = "Download the description model",
-            subtitle = "Describes what's in each screenshot for search. Until then, search uses the screen's text.",
-            icon = Icons.Rounded.Download,
-            onClick = onDownload,
-            trailing = { TextButton(onClick = onDownload) { Text("Download", color = DotTheme.extra.accent) } },
-        )
-    } }
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f).animateContentSize()) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val p = progress
+            if (p != null) {
+                Spacer(Modifier.height(10.dp))
+                LinearProgressIndicator(
+                    progress = { p.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    color = DotTheme.extra.accent,
+                    trackColor = MaterialTheme.colorScheme.outlineVariant,
+                    strokeCap = StrokeCap.Round,
+                    gapSize = 0.dp,
+                    drawStopIndicator = {},
+                )
+            }
+        }
+        if (action != null) {
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = c::startModelDownload) { Text(action, color = DotTheme.extra.accent) }
+        }
+    }
 }

@@ -55,6 +55,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.pdrajan.dot.design.DotTheme
 import com.pdrajan.dot.design.MediaThumb
+import androidx.compose.ui.platform.LocalWindowInfo
 import com.pdrajan.dot.design.MediaThumbnail
 import com.pdrajan.dot.design.MediaThumbs
 import com.pdrajan.dot.engine.Entity
@@ -83,9 +84,13 @@ fun ShotThumb(
     modifier: Modifier = Modifier,
     /** Null where the grid's drag-to-select handles the long press. */
     onLongClick: (() -> Unit)? = null,
+    /** The grid's column count: the thumbnail is made at the cell's real size, so it's sharp. */
+    columns: Int = 3,
     overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {},
 ) {
+    val cellPx = LocalWindowInfo.current.containerSize.width / columns.coerceAtLeast(1)
     MediaThumbnail(
+        sizePx = cellPx.coerceAtLeast(64),
         model = MediaThumb(shot.uri),
         memoryCacheKey = MediaThumbs.cacheKey(shot.id),
         sharedKey = shotKey(shot.id),

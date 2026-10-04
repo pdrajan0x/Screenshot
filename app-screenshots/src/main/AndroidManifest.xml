@@ -13,20 +13,27 @@
         android:maxSdkVersion="28" />
     <!-- The viewer's details show where a screenshot was taken when the file records it. -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
-    <!-- Personal sideloaded app: lets Xiaomi-style screenshot names (package ids) show real app names. -->
-    <uses-permission
-        android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
-    <!-- Only to download the description model once, through Android's download manager. -->
+    <!-- Only to download the description model once (see ModelDownload). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- A long background run shows a quiet notification so Android lets it finish. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
-    <!-- Settings → "Let it run in the background": Android's one-tap battery exemption prompt. -->
-    <uses-permission
-        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
-        tools:ignore="BatteryLife" />
+
+    <!--
+        The phone's apps with an icon (and the home screen), to name the app a screenshot came from.
+        Only these, rather than every installed package: fewer permissions for Play Protect to flag.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+    </queries>
 
     <application
         android:name=".DotScreenshotsApp"
@@ -64,15 +71,6 @@
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync|mediaProcessing"
             tools:node="merge" />
-
-        <!-- A description model file finished downloading. -->
-        <receiver
-            android:name=".index.ModelDownloadReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
-            </intent-filter>
-        </receiver>
 
         <activity
             android:name=".MainActivity"
